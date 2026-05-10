@@ -1,0 +1,13 @@
+{
+  "$schema": "mindxtrain.deploy",
+  "_comment": "Runtime defaults for `mindxtrain serve` / `deploy`; ${ENV} interpolation per ml-intern style.",
+  "backend": "${MINDXTRAIN_SERVE_BACKEND:-vllm}",
+  "host": "${MINDXTRAIN_HOST:-0.0.0.0}",
+  "port": "${MINDXTRAIN_PORT:-8000}",
+  "tensor_parallel": "${MINDXTRAIN_TP:-1}",
+  "max_model_len": "${MINDXTRAIN_MAX_MODEL_LEN:-32768}",
+  "ab_test": {
+    "canary_pct": 0.0
+  },
+  "registry_path": "${MINDXTRAIN_REGISTRY:-./out/registry.json}"
+}

@@ -1,0 +1,21 @@
+# mindxtrain serving container — vLLM-ROCm.
+#
+# Boots vLLM against the FP8-quantized checkpoint produced by
+# `mindxtrain quantize`. Uses AITER kernels (FlashAttention/MoE/FP8).
+FROM docker.io/rocm/vllm-dev:rocm7.2.1
+
+ENV PYTORCH_ROCM_ARCH=gfx942 \
+    HSA_NO_SCRATCH_RECLAIM=1 \
+    HIP_FORCE_DEV_KERNARG=1 \
+    GPU_MAX_HW_QUEUES=1 \
+    VLLM_USE_TRITON_FLASH_ATTN=0
+
+WORKDIR /workspace/mindxtrain
+
+EXPOSE 8000
+
+# The image already contains vLLM-ROCm; the actual `vllm serve` invocation
+# is constructed by `mindxtrain.deploy.vllm_launcher.build_vllm_command` and run
+# at container start time.
+ENTRYPOINT ["vllm"]
+CMD ["--help"]

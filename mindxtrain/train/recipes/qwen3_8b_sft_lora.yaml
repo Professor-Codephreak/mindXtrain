@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: Apache-2.0
+# Hero recipe: Qwen3-8B SFT with LoRA on a single MI300X.
+# Fits one card with bs=8 seq=4096, BF16, AdamW; ~80 GB peak; 12-20k tok/s on Primus-Turbo.
+meta:
+  project: mindxtrain_demo
+  run_name: qwen3_8b_sft_lora
+  seed: 2048
+  license: apache-2.0
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 1
+  expected_hbm_gb: 192
+
+autotune:
+  enabled: true
+  plan_path: ./out/mindxtrain.tuned.yaml
+  budget_seconds: 60
+  policy: aot_only
+
+model:
+  name: Qwen/Qwen3-8B
+  attn_implementation: flash_attention_2
+  torch_dtype: bfloat16
+  trust_remote_code: false
+
+data:
+  source: hf
+  hf_id: HuggingFaceH4/ultrachat_200k
+  split: train_sft
+  seq_len: 4096
+  packing: true
+  dedupe:
+    minhash:
+      threshold: 0.85
+    semdedup:
+      threshold: 0.95
+      model: sentence-transformers/all-MiniLM-L6-v2
+  shard:
+    num_shards: 1
+
+train:
+  backend: axolotl
+  method:
+    kind: lora
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+  optimizer:
+    name: adamw_torch_fused
+    lr: 1.0e-4
+    betas: [0.9, 0.95]
+    weight_decay: 0.1
+    grad_clip: 1.0
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 3
+  batch:
+    per_device: 8
+    grad_accum: 4
+  precision: bfloat16
+  gradient_checkpointing: true
+  flash_attention:
+    backend: ck
+  fsdp:
+    enabled: false
+    auto_wrap: true
+  env:
+    HSA_NO_SCRATCH_RECLAIM: "1"
+    NVTE_CK_USES_BWD_V3: "1"
+    NVTE_CK_IS_V3_ATOMIC_FP32: "1"
+    PRIMUS_TURBO_ATTN_V3_ATOMIC_FP32: "1"
+    NCCL_MIN_NCHANNELS: "112"
+    HIP_FORCE_DEV_KERNARG: "1"
+    PYTORCH_ROCM_ARCH: "gfx942"
+
+eval:
+  harness:
+    tasks: [mmlu, gsm8k, ifeval, humaneval]
+    fewshot: 5
+  regression:
+    baseline: Qwen/Qwen3-8B
+    threshold_pct: -1.0
+
+quantize:
+  enabled: true
+  scheme: quark_fp8
+  ptpc: true
+
+serve:
+  backend: vllm-rocm
+  reasoning_parser: qwen3
+  tool_call_parser: hermes
+  tensor_parallel: 1
+  max_model_len: 8192
+  port: 8000
+
+publish:
+  enabled: true
+  hf:
+    repo: lablab-ai-amd-developer-hackathon/mindxtrain-qwen3-8b-demo
+    private: false
+  lighthouse:
+    api_key_env: LIGHTHOUSE_API_KEY
+  mindx:
+    api_url: https://mindx.pythai.net/v1/agents
+    register_as_capability: true
+  agenticplace:
+    api_url: https://agenticplace.pythai.net/v1/listings
+    chain_map_url: https://agenticplace.pythai.net/allchain.html
+  bankon:
+    ens_parent: bankon.eth
+    subname: qwen3-8b-mindxtrain-demo
+  billing:
+    x402:
+      network: algorand
+      asset: USDC
+      receiver_via: parsec_wallet
+      price_per_1k_tokens: 0.0002
+
+receipt:
+  output: ./out/receipt.json
+  include:
+    - rocm_version
+    - gfx_arch
+    - container_digest
+    - all_git_shas
+    - yaml_hash
+    - dataset_cids
+    - eval_report
+    - energy_kwh

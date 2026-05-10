@@ -1,0 +1,48 @@
+# Default-discovered compose file for `podman-compose up` at the repo root.
+# Wires the operator FastAPI app -> vLLM-ROCm on the MI300X droplet.
+# Canonical dev stack also lives at ops/compose/compose_dev.yaml.
+
+services:
+  vllm:
+    image: docker.io/rocm/vllm-dev:rocm7.2.1
+    container_name: mindxtrain-vllm
+    ipc: host
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      PYTORCH_ROCM_ARCH: gfx942
+      HSA_NO_SCRATCH_RECLAIM: "1"
+      HIP_FORCE_DEV_KERNARG: "1"
+      GPU_MAX_HW_QUEUES: "1"
+    volumes:
+      - ./out/runs:/workspace/runs:ro
+    command: >
+      vllm serve /workspace/runs/latest/quantized
+      --tensor-parallel-size 1
+      --max-model-len 8192
+      --port 8000
+    ports:
+      - "8000:8000"
+
+  operator:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: mindxtrain-operator
+    depends_on:
+      - vllm
+    environment:
+      MINDXTRAIN_BACKEND: vllm
+      MINDXTRAIN_VLLM_BASE_URL: http://vllm:8000/v1
+      MINDXTRAIN_PERSONA_PATH: /home/hacker/mindX/personas/codephreak.json
+    command: >
+      uvicorn mindxtrain.operator.app:app --host 0.0.0.0 --port 8080
+    ports:
+      - "8080:8080"

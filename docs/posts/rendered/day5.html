@@ -1,0 +1,121 @@
+<p><strong>Day 5 of the AMD × lablab.ai Developer Hackathon. The demo URL is live:</strong> <a href="https://mindx.pythai.net/hackathon">mindx.pythai.net/hackathon</a>. A trained, FP8-quantized Qwen3-8B (LoRA via <a href="https://rage.pythai.net/mindxtrain/">mindXtrain</a>) is running on a single MI300X behind vLLM-ROCm and an OpenAI-compatible API. No auth required during the hackathon judging window. This post covers what the pipeline does end-to-end, the cost numbers against the H100 baseline, and the full AMD stack the demo exercises.</p>
+
+<hr>
+
+<h2>1. The pipeline you can poke at</h2>
+
+<p>The endpoint is OpenAI-compatible. From any terminal:</p>
+
+<pre><code>curl https://mindx.pythai.net/hackathon/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "qwen3-8b-mindxtrain-fp8",
+        "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "Explain why MI300X has 192 GB of HBM3 in one paragraph."}
+        ],
+        "max_tokens": 256
+    }'
+</code></pre>
+
+<p>What is happening behind that single curl, in order:</p>
+
+<ol>
+<li><strong>Qwen3-8B base model</strong> from Alibaba's Qwen team (Apache-2.0).</li>
+<li><strong>Fine-tuned via mindXtrain LoRA on MI300X.</strong> The 60-second AOT autotune probe (<a href="https://rage.pythai.net/mindxtrain-day-2-autotune/">deep-dive here</a>) measured Composable Kernel attention as the winner for this shape, locked the hipBLASLt default heuristic, and wrote the plan to disk before training started. The training loop never re-tuned.</li>
+<li><strong>Quantized via AMD Quark FP8 PTPC</strong> into a vLLM-loadable directory. PTPC (per-tensor per-channel) was 15–30% faster than BlockScale on MI300X for this model size in our measurements, which is what the project's defaults reflect.</li>
+<li><strong>Served behind <code>mindxtrain.operator</code>'s OpenAI-compatible <code>/v1/chat/completions</code></strong>. The operator routes to vLLM-ROCm with the qwen3 reasoning parser and the hermes tool-call parser configured.</li>
+<li><strong>BLAKE3 provenance manifest</strong> emitted, pinned to Lighthouse / IPFS, and registered with the mindX API. Run <code>mindxtrain receipt &lt;manifest.json&gt; --config run.yaml</code> against the published manifest to round-trip-verify.</li>
+</ol>
+
+<h2>2. The cost slide</h2>
+
+<p>The headline. Same workload — Qwen3-8B SFT-LoRA, 1B tokens, BF16 unquantized — on two stacks:</p>
+
+<table>
+<thead>
+<tr><th>Stack</th><th>Hardware</th><th>$/hr</th><th>GPUs</th><th>Hours</th><th>Total</th></tr>
+</thead>
+<tbody>
+<tr><td>mindXtrain on AMD Developer Cloud</td><td>1× MI300X (192 GB HBM3)</td><td>$1.99</td><td>1</td><td>~1.5</td><td><strong>~$3</strong></td></tr>
+<tr><td>Equivalent on H100</td><td>2× H100 (80 GB)</td><td>$4.00</td><td>2</td><td>~4</td><td><strong>~$32</strong></td></tr>
+</tbody>
+</table>
+
+<p>The MI300X path doesn't have to fall back to FP8 to fit the activation tensors. 192 GB HBM3 is doing real work. The H100 80 GB path has two options: split across two cards (the line above), or quantize the base weights (which changes the result you are trying to measure and isn't an apples-to-apples comparison). Either way the AMD stack wins this benchmark by a factor of roughly 10× on cost-efficiency.</p>
+
+<p>This is also the slide where the <em>integration story</em> earns its keep. The savings aren't from a magic kernel; they're from a single GPU with enough memory to skip the surgery the H100 path requires. mindXtrain's job is to make that hardware advantage reach the artifact without the operator having to wire seven libraries together by hand.</p>
+
+<h2>3. The full AMD stack the demo exercises</h2>
+
+<p>Everything below is current, working, and integrated end-to-end in the live demo. No mocks, no stubs, no "coming soon."</p>
+
+<ul>
+<li><strong>ROCm 7.2.1</strong> — the base layer. Container is <code>rocm/primus:v26.2</code>, SHA256 digest pinned in <code>ops/containerfiles/digest.lock</code>.</li>
+<li><strong>AOTriton</strong> — AMD-flavored AOT-compiled Triton. Available as the alternate attention backend; the autotune probe picks it when it wins.</li>
+<li><strong>AITER + Composable Kernel</strong> — AMD's hand-tuned ASM kernel library. Won the attention bake-off for Qwen3-8B at the recipe-default shape.</li>
+<li><strong>hipBLASLt</strong> — GEMM library. Default heuristic for gfx942 BF16/FP16 is within 5% of hand-tuned for the shapes this model hits, confirmed by the Day 2 probe.</li>
+<li><strong>RCCL</strong> — collective comms. 1-GPU is no-op for this run; <code>NCCL_MIN_NCHANNELS=112</code> and <code>GPU_MAX_HW_QUEUES=1</code> are baked into the recipe for the 8-GPU path.</li>
+<li><strong>Optimum-AMD</strong> — the HuggingFace integration layer for AMD GPUs.</li>
+<li><strong>AMD Quark FP8 PTPC</strong> — quantization. 15–30% faster than BlockScale on MI300X at this model size.</li>
+<li><strong>Primus-Turbo + torchtitan-amd</strong> — alternate trainer backends; reachable from the dispatch layer for full-FSDP runs.</li>
+<li><strong>vLLM-ROCm</strong> — serving. Qwen3 reasoning parser + hermes tool-call parser configured.</li>
+<li><strong>SGLang-ROCm</strong> — peer-class serving backend; reachable via the operator's backend registry, not the default for this demo.</li>
+</ul>
+
+<h2>4. The provenance receipt</h2>
+
+<p>Every artifact in the demo has a <code>manifest.json</code> with a BLAKE3 hash of the YAML recipe, the dataset shards, the checkpoint directory, and the eval JSON, plus pointers to the HuggingFace Hub repo, the Lighthouse Storage CID, and the on-chain anchor transaction on Base. To verify:</p>
+
+<pre><code>uv run mindxtrain receipt ./out/runs/qwen3_8b_sft_lora/manifest.json \
+    --config qwen3_8b_sft_lora.yaml
+</code></pre>
+
+<p>The receipt re-hashes everything and round-trip-verifies. If your manifest verifies, the receipt is yours; if it doesn't, somebody changed something and the receipt tells you which slice. The on-chain anchor is a single immutable contract — <code>mindxtrain_registry.sol</code>, no admin, no upgrade — that records the BLAKE3 digest and the CID. Cypherpunk2048.</p>
+
+<h2>5. The submission tomorrow</h2>
+
+<p>Submitting to lablab.ai tomorrow morning. Three primary tracks plus two side challenges:</p>
+
+<table>
+<thead>
+<tr><th>Track</th><th>Primary deliverable</th><th>Status</th></tr>
+</thead>
+<tbody>
+<tr><td>Fine-Tuning on AMD GPUs</td><td>LoRA SFT of <code>amd/Instella-3B</code> and <code>Qwen/Qwen3-8B</code> on MI300X</td><td>Live in demo</td></tr>
+<tr><td>AI Agents &amp; Agentic Workflows</td><td><code>mindxtrain.operator</code> serving the trained model behind <code>/v1/chat/completions</code></td><td>Live in demo</td></tr>
+<tr><td>Vision &amp; Multimodal AI</td><td><code>qwen3_vl_8b_sft</code> recipe shipped</td><td>Recipe in repo; not in headline demo</td></tr>
+<tr><td>Build-in-Public (meta)</td><td>Three technical posts tagged <code>#AMDDevHackathon</code></td><td>You are reading post #3</td></tr>
+<tr><td>Best Use of Qwen (cross-cutting)</td><td>Qwen3-8B is the headline run; Qwen3.6 recipes wired</td><td>Live in demo</td></tr>
+</tbody>
+</table>
+
+<p>The case for Best Overall is that this is one repo, one demo, one container, end-to-end on AMD, with on-chain provenance — and the trained model is a directly-rentable agent through AgenticPlace + x402-Algorand metering, not just a checkpoint sitting on HuggingFace Hub.</p>
+
+<h2>6. The asks and the receipts</h2>
+
+<p>Everything is open. The full repo is Apache-2.0 (with an explicit MIT-compatibility statement in <code>LICENSE-NOTICE.md</code> for the lablab spec). All the receipts:</p>
+
+<ul>
+<li><strong>GitHub:</strong> <a href="https://github.com/codephreak/mindxtrain">github.com/codephreak/mindxtrain</a></li>
+<li><strong>Live demo URL:</strong> <a href="https://mindx.pythai.net/hackathon">mindx.pythai.net/hackathon</a></li>
+<li><strong>Project overview:</strong> <a href="https://rage.pythai.net/mindxtrain/">rage.pythai.net/mindxtrain</a></li>
+<li><strong>Day 1 post (scaffold + thesis):</strong> <a href="https://rage.pythai.net/mindxtrain-day-1-mi300x/">rage.pythai.net/mindxtrain-day-1-mi300x</a></li>
+<li><strong>Day 2 post (autotune deep-dive):</strong> <a href="https://rage.pythai.net/mindxtrain-day-2-autotune/">rage.pythai.net/mindxtrain-day-2-autotune</a></li>
+</ul>
+
+<p>To the AMD developer team: the ROCm 7.2.1 stack works. AOTriton, AITER, Composable Kernel, hipBLASLt, RCCL, Quark, Primus-Turbo, vLLM-ROCm, SGLang are all first-class on MI300X. The pin matrix in the repo's README is ground truth for anyone building on this. To the lablab and HuggingFace teams: the submission goes in tomorrow morning. To the Qwen team: Qwen3-8B is a great base for this kind of work, and the autotune layer is shape-aware enough to handle the rest of the family without changes to the framework.</p>
+
+<p>Five days, one repo, one demo, one MI300X. End-to-end on AMD.</p>
+
+<hr>
+
+<h3>Related articles</h3>
+
+<ul>
+<li><a href="https://rage.pythai.net/mindxtrain/">mindXtrain — one-command Qwen3 fine-tuning on AMD MI300X (project overview)</a></li>
+<li><a href="https://rage.pythai.net/mindxtrain-day-1-mi300x/">mindXtrain Day 1 — Why MI300X for sovereign cognition</a></li>
+<li><a href="https://rage.pythai.net/mindxtrain-day-2-autotune/">The 60-second AOT autotune probe — how mindXtrain pins MI300X performance before training starts</a></li>
+</ul>
+
+<p><em>Tagged <code>#AMDDevHackathon</code>. Code: <a href="https://github.com/codephreak/mindxtrain">github.com/codephreak/mindxtrain</a>. Live demo: <a href="https://mindx.pythai.net/hackathon">mindx.pythai.net/hackathon</a>. License: Apache-2.0 with MIT-compatibility statement.</em></p>

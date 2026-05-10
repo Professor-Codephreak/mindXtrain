@@ -1,0 +1,23 @@
+{
+  "$schema": "mindxtrain.config.schema.XTrainConfig",
+  "_comment": "Runtime defaults for `mindxtrain train`; ${ENV} interpolation per ml-intern style.",
+  "meta": {
+    "project": "${MINDXTRAIN_PROJECT:-mindxtrain-default}",
+    "owner": "${MINDXTRAIN_OWNER:-anon}"
+  },
+  "model": {
+    "name": "${MINDXTRAIN_BASE_MODEL:-Qwen/Qwen3.5-8B}",
+    "tokenizer": "${MINDXTRAIN_BASE_MODEL:-Qwen/Qwen3.5-8B}"
+  },
+  "hardware": {
+    "gpus": "${MINDXTRAIN_GPUS:-1}",
+    "gfx_arch": "${MINDXTRAIN_GFX_ARCH:-gfx942}"
+  },
+  "autotune": {
+    "policy": "aot_only"
+  },
+  "publish": {
+    "storage_provider": "${MINDXTRAIN_STORAGE:-local_fs}",
+    "lighthouse_endpoint": "${LIGHTHOUSE_ENDPOINT:-https://node.lighthouse.storage}"
+  }
+}

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: Apache-2.0
+# Qwen3-VL-8B vision-language SFT — Vision/Multimodal track entry.
+meta:
+  project: mindxtrain_demo
+  run_name: qwen3_vl_8b_sft
+  seed: 2048
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 1
+  expected_hbm_gb: 192
+
+autotune:
+  enabled: true
+
+model:
+  name: Qwen/Qwen3-VL-8B-Instruct
+  attn_implementation: flash_attention_2
+  torch_dtype: bfloat16
+
+data:
+  source: hf
+  hf_id: liuhaotian/LLaVA-Instruct-150K
+  split: train
+  seq_len: 4096
+  packing: false
+
+train:
+  backend: axolotl
+  method:
+    kind: lora
+    r: 16
+    alpha: 32
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  optimizer:
+    name: adamw_torch_fused
+    lr: 1.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 2
+  batch:
+    per_device: 4
+    grad_accum: 4
+  precision: bfloat16
+  gradient_checkpointing: true

@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: Apache-2.0
+# Secondary track: amd/Instella-3B-Instruct LoRA on tatsu-lab/alpaca[:5000].
+# AMD-on-AMD narrative; runs in ~30 min on a single MI300X for ~$1 of credit.
+meta:
+  project: mindxtrain_demo
+  run_name: instella_3b_alpaca_lora
+  seed: 2048
+  license: apache-2.0
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 1
+  expected_hbm_gb: 192
+
+autotune:
+  enabled: true
+  budget_seconds: 60
+  policy: aot_only
+
+model:
+  name: amd/Instella-3B-Instruct
+  attn_implementation: flash_attention_2
+  torch_dtype: bfloat16
+
+data:
+  source: hf
+  hf_id: tatsu-lab/alpaca
+  split: train
+  streaming: true
+  max_samples: 5000
+  seq_len: 2048
+  packing: true
+
+train:
+  backend: axolotl
+  method:
+    kind: lora
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  optimizer:
+    name: adamw_torch_fused
+    lr: 2.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 3
+  batch:
+    per_device: 4
+    grad_accum: 4
+  precision: bfloat16
+  gradient_checkpointing: true
+  fsdp:
+    enabled: false
+
+quantize:
+  enabled: true
+  scheme: quark_fp8
+  ptpc: true
+
+serve:
+  backend: vllm-rocm
+  reasoning_parser: none
+  tool_call_parser: none
+  max_model_len: 4096

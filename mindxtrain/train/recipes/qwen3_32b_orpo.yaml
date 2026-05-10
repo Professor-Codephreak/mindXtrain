@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Qwen3-32B ORPO (Odds Ratio Preference Optimization) — single-stage SFT+RLHF.
+meta:
+  project: mindxtrain_demo
+  run_name: qwen3_32b_orpo
+  seed: 2048
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 8
+
+autotune:
+  enabled: true
+
+model:
+  name: Qwen/Qwen3-32B
+  torch_dtype: bfloat16
+
+data:
+  source: hf
+  hf_id: HuggingFaceH4/ultrafeedback_binarized
+  split: train_prefs
+  seq_len: 4096
+
+train:
+  backend: axolotl
+  method:
+    kind: orpo
+    beta: 0.1
+  optimizer:
+    name: adamw_torch_fused
+    lr: 5.0e-6
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 1
+  batch:
+    per_device: 1
+    grad_accum: 8
+  precision: bfloat16
+  fsdp:
+    enabled: true

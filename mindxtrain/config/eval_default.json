@@ -1,0 +1,12 @@
+{
+  "$schema": "mindxtrain.eval",
+  "_comment": "Runtime defaults for `mindxtrain eval`; ${ENV} interpolation per ml-intern style.",
+  "tasks": [
+    "lighteval/mmlu",
+    "lighteval/gsm8k",
+    "bfcl/v4_simple"
+  ],
+  "out_dir": "${MINDXTRAIN_OUT_DIR:-./out/eval}",
+  "persona_baseline": "${MINDXTRAIN_PERSONA_BASELINE:-}",
+  "agenda": "${MINDXTRAIN_AGENDA:-}"
+}

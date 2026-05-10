@@ -1,0 +1,124 @@
+<p><strong>mindXtrain</strong> is the first one-command Qwen3 fine-tuner natively optimized for AMD MI300X. It is the AMD-shaped half of the PYTHAI/DELTAVERSE stack: a single Python package that takes a YAML recipe and produces a trained, evaluated, FP8-quantized, served, and on-chain-anchored model — all on a single MI300X, all driven by a 60-second on-device autotune that pins kernel and collective choices before training starts. This post is the canonical landing page for the project. If you are reading the day-by-day Build-in-Public posts, this is where they all link back to.</p>
+
+<hr>
+
+<h2>1. Why this exists</h2>
+
+<p>Fine-tuning a Qwen3-class model end-to-end is currently a multi-day exercise across mismatched tools. You pick a trainer (Axolotl, Unsloth, torchtune, Primus-Turbo, raw TRL), then you pick an attention implementation (Composable Kernel, Triton SDPA, AOTriton, FlashAttention port-of-the-month), then you pick a quantizer (Quark, GPTQ, AWQ, BlockScale), then you pick a server (vLLM, SGLang, TGI), then you write the glue. Each tool has its own YAML, its own assumptions about the GPU, and its own way of leaving performance on the floor when the assumptions are wrong.</p>
+
+<p>mindXtrain collapses that surface. One CLI verb per stage. One Pydantic-validated config per run. One container image — the AMD-published <code>rocm/primus:v26.2</code> with a SHA256 digest pinned in <code>ops/containerfiles/digest.lock</code>. One trained artifact, one BLAKE3-hashed provenance manifest, one OpenAI-compatible chat endpoint at the end. The architectural opinion is that the <em>integration</em> is the product. AMD already shipped the kernels. AMD already shipped the GPU. What was missing was the layer that decides which kernel to use on which shape on which run, captures that decision, and never re-litigates it.</p>
+
+<h2>2. The differentiator — a 60-second AOT autotune probe</h2>
+
+<p>Before each training run, mindXtrain runs a short on-device micro-benchmark. It probes attention kernels (Composable Kernel vs Triton vs AOTriton) on the actual shapes the run will hit, picks the GEMM heuristic for hipBLASLt on those same shapes, and resolves the collective topology (1-GPU is no-op; 8-GPU sets <code>NCCL_MIN_NCHANNELS=112</code> and <code>GPU_MAX_HW_QUEUES=1</code>; 2- and 4-GPU paths are <em>rejected at schema time</em> because xGMI bandwidth between subsets is asymmetric and silently bottlenecks FSDP shards).</p>
+
+<p>The probe writes its decisions into an <code>AutotunePlan</code> JSON. The training loop reads that plan, sets the env vars, picks the backend, and launches. <strong>Nothing re-tunes during the loop.</strong> No <code>torch.compile(mode="max-autotune")</code> in production. No JIT autotune in vLLM. The autotune policy is <code>aot_only</code> as a YAML contract, enforced by the schema, tested in <code>tests/test_config_schema.py</code>.</p>
+
+<p>This is the cypherpunk2048 reproducibility standard applied to the ROCm 7.2.1 reality. Same plan, same kernels, hash-equal outputs across machines. No competitor framework ships this discipline. The 60 seconds you spend before training pay for themselves in the throughput delta and pay <em>again</em> in not having to debug a non-deterministic loss curve at 03:00 because Triton picked a different kernel on a cold cache. The deeper write-up is in the <a href="https://rage.pythai.net/mindxtrain-day-2-autotune/">Day 2 Build-in-Public post</a>.</p>
+
+<h2>3. Architecture in five concentric layers</h2>
+
+<p>Each inner layer is consumed by the next, never the reverse. This is enforced by import discipline in <code>mindxtrain/</code> and by the test suite.</p>
+
+<table>
+<thead>
+<tr><th>Layer</th><th>Module</th><th>Responsibility</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td><code>mindxtrain/cli/main.py</code></td><td>Typer CLI: <code>init · bench · train · dataset prep · eval · quantize · serve · publish · receipt</code>. Never reaches into a backend; consumes a validated config plus an <code>AutotunePlan</code> and dispatches.</td></tr>
+<tr><td>2</td><td><code>mindxtrain/autotune/</code></td><td>The 60-second probe. Emits <code>AutotunePlan</code> JSON. AOT-only.</td></tr>
+<tr><td>3</td><td><code>mindxtrain/data/</code></td><td>Dataset pipeline: curate → MinHash + SemDeDup dedupe → filter → tokenize → pack → synth → verify.</td></tr>
+<tr><td>4</td><td><code>mindxtrain/train/</code></td><td>Backend dispatch into Axolotl, Unsloth, torchtune, Primus-Turbo, or in-process TRL. Methods: SFT, DPO, ORPO, GRPO, GSPO, RLHF, tool-use, CPT.</td></tr>
+<tr><td>5</td><td><code>mindxtrain/{eval,deploy,storage,provenance,operator}</code></td><td>Quark FP8 / MXFP4 → lm-eval-harness → HF Hub push → Lighthouse pin → mindX register → AgenticPlace → BANKON ENS → x402 metering → ERC-8004 attestation.</td></tr>
+</tbody>
+</table>
+
+<p>The end-to-end flow: <code>XTrainConfig</code> (Pydantic, <code>extra: forbid</code>, <code>frozen: true</code>) plus <code>AutotunePlan</code> → <code>dispatch_training()</code> → <code>checkpoint/</code> → <code>eval.json</code> → <code>quantized/</code> → <code>manifest.json</code> (BLAKE3 of YAML+dataset+ckpt+eval, plus HF/Lighthouse/INFT/ASA pointers). <code>mindxtrain receipt</code> re-hashes and verifies the manifest round-trip. The operator FastAPI then serves on <code>/v1/chat/completions</code> in front of vLLM-ROCm or SGLang.</p>
+
+<h2>4. The numbers — $3 vs $32</h2>
+
+<p>The cost slide is the headline. Same workload, same model, same token budget, two stacks:</p>
+
+<table>
+<thead>
+<tr><th>Stack</th><th>Hardware</th><th>Hourly cost</th><th>Hours</th><th>Total</th></tr>
+</thead>
+<tbody>
+<tr><td>mindXtrain on AMD Developer Cloud</td><td>1× MI300X (192 GB HBM3)</td><td>$1.99/hr</td><td>~1.5</td><td><strong>~$3</strong></td></tr>
+<tr><td>Equivalent on H100</td><td>2× H100 (80 GB each)</td><td>$4.00/hr × 2</td><td>~4</td><td><strong>~$32</strong></td></tr>
+</tbody>
+</table>
+
+<p>Roughly 10× cost-efficiency. The MI300X path doesn't need to fall back to FP8 to fit the activation tensors — 192 GB HBM3 swallows a Qwen3-8B BF16 LoRA at <code>bs=8 seq=4096</code> with massive headroom. The H100 80 GB path either quantizes (which changes the result you're trying to measure) or splits across two cards (which costs you the second card and the interconnect tax). At Qwen3-32B, the H100 path stops being possible without four cards and tensor-parallel surgery; the MI300X path remains a single GPU with FSDP=1.</p>
+
+<h2>5. Hackathon tracks targeted</h2>
+
+<p>The submission is for the AMD × lablab.ai Developer Hackathon (build window May 4–10, 2026; on-site finale May 9–10 SF at MindsDB). Three primary tracks:</p>
+
+<table>
+<thead>
+<tr><th>Track</th><th>Primary deliverable</th></tr>
+</thead>
+<tbody>
+<tr><td>Fine-Tuning on AMD GPUs</td><td>LoRA SFT of <code>amd/Instella-3B-Instruct</code> and <code>Qwen/Qwen3-8B</code> on a single MI300X.</td></tr>
+<tr><td>AI Agents &amp; Agentic Workflows</td><td>The <code>mindxtrain.operator</code> FastAPI serves the trained model behind <code>/v1/chat/completions</code>; mindX agents consume it.</td></tr>
+<tr><td>Vision &amp; Multimodal AI</td><td>The <code>qwen3_vl_8b_sft</code> recipe ships in <code>mindxtrain/train/recipes/</code> as a stretch deliverable.</td></tr>
+</tbody>
+</table>
+
+<p>Plus the Build-in-Public meta track (these posts) and Best Use of Qwen (Qwen3-8B is the secondary training run; Qwen3.6 recipes are wired but stretch).</p>
+
+<h2>6. The non-negotiables</h2>
+
+<p>The schema enforces a small set of MI300X invariants that are not style preferences — they are deployment bugs if violated.</p>
+
+<ul>
+<li><strong>AOT-only.</strong> No JIT autotune in production paths. The YAML key <code>autotune.policy</code> must equal <code>aot_only</code>, period.</li>
+<li><strong><code>hardware.gpus</code> is <code>Literal[1, 8]</code>.</strong> The 2- and 4-GPU configurations are rejected at parse time because asymmetric xGMI bandwidth across MI300X subsets bottlenecks FSDP — a silent perf regression that is much worse than a loud rejection. Tested in <code>test_config_schema.py::test_xgmi_2gpu_rejected</code>.</li>
+<li><strong>Seven MI300X env vars are defaults in every recipe.</strong> The autotune plan can override values but never remove keys. They are: <code>PYTORCH_ROCM_ARCH=gfx942</code>, <code>HSA_NO_SCRATCH_RECLAIM=1</code>, <code>HIP_FORCE_DEV_KERNARG=1</code>, <code>GPU_MAX_HW_QUEUES=1</code>, <code>NVTE_CK_USES_BWD_V3=1</code>, <code>NVTE_CK_IS_V3_ATOMIC_FP32=1</code>, <code>PRIMUS_TURBO_ATTN_V3_ATOMIC_FP32=1</code>, <code>NCCL_MIN_NCHANNELS=112</code>.</li>
+<li><strong><code>extra: forbid</code> + <code>frozen: true</code> on every Pydantic model.</strong> Unknown YAML keys raise <code>ValidationError</code>; loaded configs are immutable.</li>
+<li><strong>Solidity contracts are write-once.</strong> No proxies, no <code>Ownable</code>, no admin keys, no setters in <code>contracts/src/{mindxtrain_registry,x402_receiver}.sol</code>. Rotating any parameter requires a fresh deploy. Cypherpunk2048.</li>
+<li><strong>numpy is pinned <code>&lt;2.0</code></strong> against <code>torch==2.9.1+rocm7.2.1.lw</code>.</li>
+<li><strong>The container is <code>rocm/primus:v26.2</code></strong>; SHA256 digest snapshot in <code>ops/containerfiles/digest.lock</code>.</li>
+</ul>
+
+<h2>7. The provenance story</h2>
+
+<p>Every run produces a <code>manifest.json</code> with a BLAKE3 hash of the YAML recipe, the dataset shards, the checkpoint directory, and the eval JSON, plus pointers to the HF Hub repo, the Lighthouse Storage CID, the optional ERC-7857 INFT id, and the Algorand ASA id if the model is listed on AgenticPlace with x402 metering. <code>mindxtrain receipt &lt;manifest.json&gt; --config run.yaml</code> re-hashes everything and round-trip-verifies. If your manifest verifies, the receipt is yours. If it doesn't, somebody changed something somewhere.</p>
+
+<p>The on-chain anchor is a single immutable contract — <code>mindxtrain_registry.sol</code>, no admin, no upgrade. It records the BLAKE3 digest and a CID. That's it. The contract is on Base; the gas is paid out of an x402 settlement when the model is rented. The model becomes a <em>directly-rentable agent</em>, not just another checkpoint sitting on HF Hub waiting to be discovered.</p>
+
+<h2>8. Try it</h2>
+
+<p>Base install is CPU-only and runs the CLI, the Coach UI, <code>bench --dry-run</code>, manifest verify, and the operator FastAPI. Heavyweight paths gate on opt-in dependency groups.</p>
+
+<pre><code>git clone https://github.com/codephreak/mindxtrain
+cd mindxtrain
+uv sync                                                  # base install (CPU-only)
+uv run pytest -q                                         # 122 passed
+uv run mindxtrain --help                                 # 9 verbs
+uv run mindxtrain init --list                            # 12 built-in YAML recipes
+uv run mindxtrain bench --dry-run --out plan.json        # CPU-safe (real probe needs MI300X)
+uv run uvicorn mindxtrain.operator.app:app --port 8080
+# → http://localhost:8080/coach/  (Coach UI, all 12 recipes, no GPU required)
+</code></pre>
+
+<p>Live demo URL during the lablab judging window: <a href="https://mindx.pythai.net/hackathon">mindx.pythai.net/hackathon</a>. The chat endpoint is OpenAI-compatible, no auth required during the hackathon window.</p>
+
+<h2>9. What's next</h2>
+
+<p>Post-hackathon: full ERC-7857 INFT minting on Base, full AgenticPlace listing with x402-Algorand metering on every inference call, and an automated CI loop that pins the autotune plan against the latest <code>rocm/primus</code> tag so that a kernel regression in upstream ROCm is caught the day it lands. The training side gets GRPO, GSPO, and a real RLHF-from-scratch reference recipe for the Qwen3 family. The serving side gets SGLang as a first-class peer to vLLM-ROCm with the same parser bookkeeping.</p>
+
+<p>The thesis the project is here to defend: an MI300X plus the right integration layer is the cheapest, most reproducible way to go from a base model to a rented agent in 2026. Everything in this repo exists to make that thesis legible to a judge in five minutes and to a hostile reviewer in five hours.</p>
+
+<hr>
+
+<h3>Related articles</h3>
+
+<ul>
+<li><a href="https://rage.pythai.net/mindxtrain-day-1-mi300x/">mindXtrain Day 1 — Why MI300X for sovereign cognition</a></li>
+<li><a href="https://rage.pythai.net/mindxtrain-day-2-autotune/">The 60-second AOT autotune probe — how mindXtrain pins MI300X performance before training starts</a></li>
+<li><a href="https://rage.pythai.net/mindxtrain-day-5-demo/">mindXtrain demo is live — Qwen3-8B on a single MI300X for less than $3</a></li>
+</ul>
+
+<p><em>Tagged <code>#AMDDevHackathon</code>. Code: <a href="https://github.com/codephreak/mindxtrain">github.com/codephreak/mindxtrain</a>. License: Apache-2.0 with MIT-compatibility statement.</em></p>

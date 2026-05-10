@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: Apache-2.0
+# Qwen3.6-35B-A3B MoE LoRA (latest open-weight checkpoint, released April 16 2026).
+# Hybrid Gated DeltaNet layers require flash-linear-attention + causal-conv1d wheels.
+meta:
+  project: mindxtrain_demo
+  run_name: qwen3_6_35b_a3b_lora
+  seed: 2048
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 8
+
+autotune:
+  enabled: true
+  budget_seconds: 120  # Hybrid GDN + MoE benefits from longer probe.
+
+model:
+  name: Qwen/Qwen3.6-35B-A3B
+  attn_implementation: flash_attention_2
+  torch_dtype: bfloat16
+
+data:
+  source: hf
+  hf_id: HuggingFaceH4/ultrachat_200k
+  split: train_sft
+  seq_len: 8192
+  packing: true
+
+train:
+  backend: axolotl
+  method:
+    kind: lora
+    r: 32
+    alpha: 64
+    # Experts only; gate frozen.
+    target_modules: [q_proj, k_proj, v_proj, o_proj, up_proj, down_proj]
+  optimizer:
+    name: adamw_torch_fused
+    lr: 1.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 2
+  batch:
+    per_device: 1
+    grad_accum: 16
+  precision: bfloat16
+  gradient_checkpointing: true
+  fsdp:
+    enabled: true

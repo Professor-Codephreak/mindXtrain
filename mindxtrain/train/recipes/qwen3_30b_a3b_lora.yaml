@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: Apache-2.0
+# Qwen3-30B-A3B (MoE) LoRA. Experts-only adapters, gate frozen — non-negotiable rule.
+meta:
+  project: mindxtrain_demo
+  run_name: qwen3_30b_a3b_lora
+  seed: 2048
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 8
+
+autotune:
+  enabled: true
+  budget_seconds: 90  # MoE expert imbalance benefits from longer probe.
+
+model:
+  name: Qwen/Qwen3-30B-A3B
+  attn_implementation: flash_attention_2
+  torch_dtype: bfloat16
+  trust_remote_code: false
+
+data:
+  source: hf
+  hf_id: HuggingFaceH4/ultrachat_200k
+  split: train_sft
+  seq_len: 4096
+  packing: true
+
+train:
+  backend: axolotl
+  method:
+    kind: lora
+    r: 32
+    alpha: 64
+    dropout: 0.0
+    # NOTE: experts only — gate frozen. up_proj/down_proj are per-expert in MoE layers.
+    target_modules: [q_proj, k_proj, v_proj, o_proj, up_proj, down_proj]
+  optimizer:
+    name: adamw_torch_fused
+    lr: 1.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 2
+  batch:
+    per_device: 2
+    grad_accum: 8
+  precision: bfloat16
+  gradient_checkpointing: true
+  fsdp:
+    enabled: true

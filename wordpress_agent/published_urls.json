@@ -1,0 +1,34 @@
+[
+  {
+    "slug": "mindxtrain",
+    "title": "mindXtrain \u2014 One-Command Qwen3 Fine-Tuning on AMD MI300X",
+    "post_id": 650,
+    "url": "https://rage.pythai.net/mindxtrain/",
+    "status": "publish",
+    "date_gmt": "2026-05-10T05:37:29"
+  },
+  {
+    "slug": "mindxtrain-day-1-mi300x",
+    "title": "mindXtrain Day 1 \u2014 Why MI300X for Sovereign Cognition",
+    "post_id": 651,
+    "url": "https://rage.pythai.net/mindxtrain-day-1-mi300x/",
+    "status": "publish",
+    "date_gmt": "2026-05-10T05:37:30"
+  },
+  {
+    "slug": "mindxtrain-day-2-autotune",
+    "title": "The 60-Second AOT Autotune Probe \u2014 How mindXtrain Pins MI300X Performance Before Training Starts",
+    "post_id": 652,
+    "url": "https://rage.pythai.net/mindxtrain-day-2-autotune/",
+    "status": "publish",
+    "date_gmt": "2026-05-10T05:37:31"
+  },
+  {
+    "slug": "mindxtrain-day-5-demo",
+    "title": "mindXtrain Demo is Live \u2014 Qwen3-8B on a Single MI300X for Less Than $3",
+    "post_id": 653,
+    "url": "https://rage.pythai.net/mindxtrain-day-5-demo/",
+    "status": "publish",
+    "date_gmt": "2026-05-10T05:37:31"
+  }
+]

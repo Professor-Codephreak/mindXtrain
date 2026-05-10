@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# Qwen3-8B continued pretraining (CPT) on a domain corpus.
+meta:
+  project: mindxtrain_demo
+  run_name: qwen3_8b_cpt
+  seed: 2048
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 8
+
+autotune:
+  enabled: true
+
+model:
+  name: Qwen/Qwen3-8B
+  torch_dtype: bfloat16
+
+data:
+  source: hf
+  hf_id: HuggingFaceFW/fineweb-edu
+  split: train
+  streaming: true
+  seq_len: 8192
+  packing: true
+
+train:
+  backend: primus
+  method:
+    kind: cpt
+  optimizer:
+    name: adamw_torch_fused
+    lr: 1.0e-5
+  schedule:
+    type: wsd
+    warmup_ratio: 0.01
+    epochs: 1
+  batch:
+    per_device: 4
+    grad_accum: 4
+  precision: bfloat16
+  fsdp:
+    enabled: true

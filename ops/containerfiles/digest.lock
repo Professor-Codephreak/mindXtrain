@@ -1,0 +1,5 @@
+# Container image digest pins. Day 2: `podman pull` then capture `podman inspect --format '{{index .RepoDigests 0}}'`.
+# Format: <image_tag> <SHA256_digest>
+
+rocm/primus:v26.2 sha256:TODO_DAY_2_AFTER_PULL
+rocm/vllm-dev:rocm7.2.1 sha256:TODO_DAY_5_AFTER_PULL

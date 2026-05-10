@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# (c) 2026 BANKON — all rights reserved.
+#
+# Systemd unit for running WordPress.agent directly under a virtualenv.
+# Use this when you do not want the container layer.
+#
+# Install:
+#   sudo cp deploy/systemd/wordpress-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wordpress-agent.service
+#   sudo systemctl status wordpress-agent.service
+
+[Unit]
+Description=WordPress.agent — agnostic publishing tool for mindX
+Documentation=https://github.com/codephreak/wordpress-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wpagent
+Group=wpagent
+WorkingDirectory=/opt/wordpress-agent
+EnvironmentFile=/etc/wordpress-agent/wordpress-agent.env
+ExecStart=/opt/wordpress-agent/.venv/bin/wordpress-agent-server
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=mixed
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=
+ReadOnlyPaths=/etc/wordpress-agent
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=256M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

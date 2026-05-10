@@ -1,0 +1,95 @@
+<p><strong>Day 2 of the AMD × lablab.ai Developer Hackathon.</strong> The 60-second AOT autotune probe — the layer that <a href="https://rage.pythai.net/mindxtrain/">mindXtrain</a> is built around — runs on real MI300X silicon for the first time. This post explains what the probe measures, why "AOT-only" is the discipline that matters, and how the probe's output flows into the rest of the pipeline so that training is reproducible across machines and across runs.</p>
+
+<hr>
+
+<h2>1. What the probe is, and what it isn't</h2>
+
+<p>The probe is a short Python orchestrator that runs three measurements on the actual GPU you are about to train on, with the actual shapes your job is going to hit, and writes a static <code>AutotunePlan</code> JSON to disk. The training loop reads that JSON, sets a handful of env vars, picks the backend, and launches. <strong>The probe runs once, before training. The training loop never re-tunes.</strong> That sentence is the entire design.</p>
+
+<p>What the probe is not: it is not <code>torch.compile(mode="max-autotune")</code>. It is not Triton's JIT autotune. It is not MIOpen find-mode. Those mechanisms re-decide kernel choices at runtime, on cold caches, on the first batch of every restart. They produce non-deterministic loss curves, non-reproducible benchmarks, and the "why is the eval different from the training run on the same checkpoint" class of bug that eats a day every time it happens. The probe replaces all of them with a measurement made deliberately, captured deliberately, and consumed deliberately.</p>
+
+<h2>2. The three measurements</h2>
+
+<p>The probe is one orchestrator plus three backend modules plus a Pydantic <code>AutotunePlan</code>. Each measurement is bounded: the whole probe finishes in under 60 seconds on an MI300X at the recipes' default budget. Tight budgets are a feature — the probe runs every time, so it has to be cheap.</p>
+
+<h3>2.1 Attention — Composable Kernel vs Triton</h3>
+
+<p>Attention is the most consequential decision. Composable Kernel (AMD's hand-tuned ASM library, surfaced via AITER) and AOTriton (the AMD-flavored AOT-compiled Triton path) are both real, both first-class on MI300X under ROCm 7.2.1, and both win on different shapes. The probe times <code>torch.scaled_dot_product_attention</code> on four representative shapes drawn from the recipe's actual <code>seq_len</code>, <code>batch_size</code>, and head config. Whichever is faster wins. The decision is locked into the plan as <code>attn_backend: ck</code> or <code>attn_backend: triton</code>, and the seven mandatory MI300X env vars (<code>NVTE_CK_USES_BWD_V3=1</code>, <code>NVTE_CK_IS_V3_ATOMIC_FP32=1</code>, <code>PRIMUS_TURBO_ATTN_V3_ATOMIC_FP32=1</code>, etc.) are set accordingly.</p>
+
+<p>For Qwen3-8B at <code>(batch=8, seq=4096, heads=32, head_dim=128)</code>, the recipe-default measurement on MI300X has CK winning by a comfortable margin over Triton. AITER's hand-tuned ASM beats Triton at this size — which is the boring expected result, but the point is that <em>the probe measured it</em> instead of someone hand-coding the assumption into the framework. If a future ROCm release flips that result on a future shape, the probe catches it.</p>
+
+<h3>2.2 GEMM — hipBLASLt heuristic check</h3>
+
+<p>Per the AMD ROCm 7.2.1 release notes, hipBLASLt 0.10's default heuristic for gfx942 BF16 / FP16 GEMMs is within ~5% of hand-tuned for the LoRA-rank-16-to-64 / hidden-2048-to-8192 shape range that mindXtrain hits. The probe runs a small check to confirm that 5% holds on the actual shapes; if it does, the plan locks in the default and moves on. Full heuristic enumeration — the brute-force search over hipBLASLt's algorithm space — is post-hackathon work. For the hackathon window, "the default is good enough and we measured it" is the right level of effort.</p>
+
+<h3>2.3 RCCL — collective topology resolution</h3>
+
+<p>RCCL handling is where the schema does most of the work. The 1-GPU path is a no-op: nothing collective happens, the plan's RCCL section is empty. The 8-GPU path sets <code>NCCL_MIN_NCHANNELS=112</code> and <code>GPU_MAX_HW_QUEUES=1</code> in the plan's env block, which are the values that consistently saturate xGMI on a full 8-card MI300X box. The 2- and 4-GPU paths <em>cannot reach the probe</em> — the schema rejected them at parse time. This is intentional. Asymmetric xGMI bandwidth between subsets of 2 or 4 MI300X cards silently bottlenecks FSDP shards, and it is the kind of bug that only shows up in throughput numbers nobody is looking at. A loud rejection at YAML-load time costs zero engineering hours; a silent 30% perf cliff costs two days.</p>
+
+<h2>3. Why AOT-only matters for production training</h2>
+
+<p>"AOT-only" is short for "ahead-of-time only — no JIT autotune in production." It is a one-line policy with surprisingly large consequences:</p>
+
+<table>
+<thead>
+<tr><th>Concern</th><th>JIT autotune behavior</th><th>AOT-only behavior</th></tr>
+</thead>
+<tbody>
+<tr><td>Determinism</td><td>Cold cache picks a different kernel each restart; loss curves drift across runs.</td><td>Same plan, same kernels, hash-equal outputs.</td></tr>
+<tr><td>Cold-start latency</td><td>First batch stalls while autotune searches.</td><td>First batch runs at steady-state.</td></tr>
+<tr><td>Reproducibility across machines</td><td>Different cache state, different decisions, different artifacts.</td><td>Plan ships with the artifact; another machine with the same plan trains the same way.</td></tr>
+<tr><td>Auditability</td><td>Decisions are runtime, ephemeral.</td><td>Decisions are a JSON file you can <code>cat</code>.</td></tr>
+<tr><td>Provenance</td><td>Manifest can't hash a runtime decision.</td><td>BLAKE3 hash of the plan goes into the manifest.</td></tr>
+</tbody>
+</table>
+
+<p>This is the cypherpunk2048 reproducibility standard applied to the ROCm reality. In a chain-anchored provenance pipeline, the autotune plan is part of the artifact, not part of the environment. Two independent operators with the same recipe and the same plan produce the same checkpoint. The receipt — <code>mindxtrain receipt &lt;manifest.json&gt; --config run.yaml</code> — verifies it.</p>
+
+<h2>4. The plan flowing through the pipeline</h2>
+
+<p>The training layer reads the plan, sets the env vars, and dispatches. Concretely:</p>
+
+<pre><code># Step 1: emit the plan (≤60s on MI300X)
+uv run mindxtrain bench --config qwen3_8b_sft_lora.yaml --out plan.json
+
+# Step 2: train, consuming the plan
+uv run mindxtrain train qwen3_8b_sft_lora.yaml --plan plan.json
+</code></pre>
+
+<p>Inside <code>mindxtrain/train/dispatch.py</code>, the plan determines:</p>
+
+<ul>
+<li>Which backend to dispatch to: Axolotl, Unsloth, torchtune, Primus-Turbo, or in-process TRL. Method-driven; SFT goes to Axolotl by default, GRPO/GSPO go to TRL, full-FSDP-32B goes to Primus-Turbo.</li>
+<li>Which env vars to set before subprocess-launching <code>accelerate</code>. The seven mandatory MI300X keys are baseline; the plan may override their values but never remove keys.</li>
+<li>Which Axolotl flags or torchtune CLI args correspond to the chosen attention backend.</li>
+</ul>
+
+<p>The plan is small, human-readable, BLAKE3-hashed into the manifest, and committed alongside the checkpoint. <code>mindxtrain receipt</code> re-hashes it on demand. There is no hidden state.</p>
+
+<h2>5. Budget and stretch — when 60 seconds isn't enough</h2>
+
+<p>Most recipes fit comfortably in a 60-second budget. The MoE recipes don't: <code>qwen3_30b_a3b_lora</code> and <code>qwen3_6_35b_a3b_lora</code> set <code>budget_seconds: 90</code> and <code>120</code> respectively, because expert imbalance means the probe has to time more shapes to make a credible decision. Even at 120 seconds, the probe is &lt;1% of a 4-hour training run's wall-clock, and the cost-amortization is favorable.</p>
+
+<p>The stretch path — for users who want to enumerate hipBLASLt heuristics or grid-search RCCL channel counts — is to run <code>mindxtrain bench --policy enumerate</code> once, save a richer plan, and reuse it across runs of the same shape. This stays AOT: the enumeration happens before training, the result is captured to disk, the loop never re-tunes. Same discipline, larger search.</p>
+
+<h2>6. Why no competitor framework ships this</h2>
+
+<p>The five major open training frameworks (Axolotl, Unsloth, torchtune, LLaMA-Factory, Primus-Turbo) each handle one slice of the problem. Axolotl is a great trainer-orchestrator. Unsloth is a great kernel-level optimizer. torchtune is a great PyTorch-native reference impl. Primus-Turbo is a great AMD-native trainer. None of them emit a static, hash-able, machine-portable AutotunePlan that the loop consumes verbatim. The reason is that they are framework-shaped: their job is to train. <em>The autotune layer is integration-shaped:</em> its job is to make a defensible kernel choice and capture it.</p>
+
+<p>mindXtrain's claim is that the integration layer is the product. The 60-second probe is the spine of the Application of Technology axis for the lablab judging — but more importantly, it is the spine of the project's reproducibility story. Without it, a Qwen3-8B fine-tune on an MI300X is "we trained it, here's the checkpoint, hopefully it works on your box too." With it, the checkpoint comes with a plan that says exactly which kernels were used and exactly which env vars were set, signed by a BLAKE3 hash and anchored to a write-once contract on Base.</p>
+
+<h2>7. Tomorrow</h2>
+
+<p>Day 3 is the actual LoRA fine-tune of <code>amd/Instella-3B-Instruct</code> on MI300X, using the plan that today's probe emitted. The dataset is curated and packed; the recipe is validated; the plan is BLAKE3'd. The training run produces a checkpoint directory, an <code>eval.json</code> from <code>lm-eval-harness</code>, and a quantized FP8 directory via AMD Quark. Day 5 is when the operator endpoint goes live and the demo URL exists. <a href="https://rage.pythai.net/mindxtrain-day-5-demo/">That post is here.</a></p>
+
+<hr>
+
+<h3>Related articles</h3>
+
+<ul>
+<li><a href="https://rage.pythai.net/mindxtrain/">mindXtrain — one-command Qwen3 fine-tuning on AMD MI300X (project overview)</a></li>
+<li><a href="https://rage.pythai.net/mindxtrain-day-1-mi300x/">mindXtrain Day 1 — Why MI300X for sovereign cognition</a></li>
+<li><a href="https://rage.pythai.net/mindxtrain-day-5-demo/">mindXtrain demo is live — Qwen3-8B on a single MI300X for less than $3</a></li>
+</ul>
+
+<p><em>Tagged <code>#AMDDevHackathon</code>. Code: <a href="https://github.com/codephreak/mindxtrain">github.com/codephreak/mindxtrain</a>. The 60-second AOT autotune probe lives in <code>mindxtrain/autotune/</code>; the schema enforcing AOT-only lives in <code>mindxtrain/config/schema.py</code>.</em></p>

@@ -1,0 +1,58 @@
+mindxtrain
+Copyright (c) 2026 BANKON / mindX
+
+This product includes software developed by the mindX project, distributed
+under the Apache License, Version 2.0 (see LICENSE).
+
+----------------------------------------------------------------------
+
+This product depends on software from the following upstream projects.
+Their copyright and license notices are reproduced below as required by
+their respective licenses.
+
+* Qwen3.5 / Qwen3.6 model weights — Alibaba Cloud
+  License: Apache License 2.0
+  Source: https://huggingface.co/Qwen/
+
+* GLM-5.1 model weights — Z.ai (formerly Zhipu AI)
+  License: MIT License (see LICENSE-MIT-upstream-glm51)
+  Source: https://huggingface.co/zai-org/
+
+* DeepSeek V3.2 model weights — DeepSeek
+  License: DeepSeek License
+  Source: https://huggingface.co/deepseek-ai/
+
+* Mistral Large 3 model weights — Mistral AI
+  License: Mistral Research License / Apache 2.0 (per release)
+  Source: https://huggingface.co/mistralai/
+
+* Phi-4-mini model weights — Microsoft Research
+  License: MIT License
+  Source: https://huggingface.co/microsoft/
+
+* Instella-3B-Instruct model weights — AMD
+  License: Apache License 2.0
+  Source: https://huggingface.co/amd/Instella-3B-Instruct
+
+* AMD ROCm, Primus, AITER, Composable Kernel, hipBLASLt, RCCL — AMD
+  License: MIT / Apache 2.0 (per project)
+  Source: https://github.com/ROCm/
+
+* PyTorch — Linux Foundation / contributors
+  License: BSD 3-Clause
+  Source: https://github.com/pytorch/pytorch
+
+* vLLM — vllm-project
+  License: Apache License 2.0
+  Source: https://github.com/vllm-project/vllm
+
+* TRL, transformers, datasets, accelerate, peft — Hugging Face
+  License: Apache License 2.0
+  Source: https://github.com/huggingface/
+
+* Lighthouse Storage SDK — Lighthouse Web3 Inc.
+  License: MIT
+  Source: https://github.com/lighthouse-web3/
+
+The full text of each upstream license is preserved in their respective
+upstream repositories.

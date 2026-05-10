@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mindXtrain Coach</title>
+  <link rel="stylesheet" href="/coach/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>mindXtrain <span class="muted">Coach</span></h1>
+    <div class="pipeline">
+      <div class="stage" data-stage="automind">automindXtrain<br/><span class="muted">runtime</span></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage active" data-stage="mind">mindXtrain<br/><span class="muted">training</span></div>
+      <div class="arrow">&rarr;</div>
+      <div class="stage" data-stage="cust">custmodel<br/><span class="muted">artifact</span></div>
+    </div>
+    <p class="lede">
+      Walk the AMD MI300X fine-tuning pipeline end-to-end.
+      Pick a recipe, watch the 60-second AOT autotune pick kernels,
+      see the Axolotl YAML compile, then cost it against H100.
+    </p>
+  </header>
+
+  <main>
+    <section id="step-recipes" class="card">
+      <header>
+        <h2><span class="step">1</span> Pick a recipe</h2>
+        <span class="hint" id="recipe-count"></span>
+      </header>
+      <div id="recipe-list" class="grid"></div>
+      <details id="recipe-detail" hidden>
+        <summary>Selected recipe YAML</summary>
+        <pre id="recipe-yaml" class="code"></pre>
+      </details>
+    </section>
+
+    <section id="step-autotune" class="card">
+      <header>
+        <h2><span class="step">2</span> Run the autotune probe</h2>
+        <span class="hint">60&thinsp;s on MI300X &middot; CPU dry-run here</span>
+      </header>
+      <p class="prose">
+        The differentiator. A short on-device micro-benchmark picks
+        Composable Kernel vs Triton SDPA, hipBLASLt heuristics, and the
+        RCCL collective config &mdash; static plan, no JIT autotune in
+        production.
+      </p>
+      <button id="run-bench">Run autotune (dry-run)</button>
+      <pre id="plan-json" class="code" hidden></pre>
+      <ul id="plan-summary" class="summary" hidden></ul>
+    </section>
+
+    <section id="step-compile" class="card">
+      <header>
+        <h2><span class="step">3</span> Compile to Axolotl YAML</h2>
+        <span class="hint">requires: recipe + plan</span>
+      </header>
+      <p class="prose">
+        Translate the canonical mindXtrain config plus the autotune plan
+        into the backend-specific YAML the trainer subprocess consumes.
+      </p>
+      <button id="run-compile" disabled>Compile</button>
+      <ul id="compile-overrides" class="summary" hidden></ul>
+      <pre id="compile-yaml" class="code" hidden></pre>
+    </section>
+
+    <section id="step-train" class="card">
+      <header>
+        <h2><span class="step">4</span> Train (live)</h2>
+        <span class="hint">requires: compile complete</span>
+      </header>
+      <p class="prose">
+        Spawn the trainer subprocess and watch loss, learning rate, and
+        the raw <code>train.log</code> stream in over Server-Sent Events.
+        On a CPU-only laptop the launch returns a 503 with an install hint;
+        on the MI300X box the loss curve fills in as <code>accelerate launch</code>
+        progresses.
+      </p>
+      <div class="train-controls">
+        <button id="run-train" disabled>Run training</button>
+        <button id="cancel-train" hidden>Stop</button>
+        <span id="train-status" class="badge-status pending" hidden>pending</span>
+        <span id="train-id" class="hint mono"></span>
+      </div>
+      <div id="train-charts" hidden>
+        <div class="chart-wrap">
+          <canvas id="loss-chart" height="180"></canvas>
+          <p id="chart-fallback" class="hint" hidden>
+            Chart.js not loaded &mdash; latest loss values shown in the table below.
+          </p>
+        </div>
+        <table id="metrics-table">
+          <thead><tr><th>step</th><th>loss</th><th>lr</th><th>grad_norm</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <details id="train-log-wrap" hidden>
+        <summary>train.log (live tail)</summary>
+        <pre id="train-log" class="code log-tail"></pre>
+      </details>
+    </section>
+
+    <section id="step-cost" class="card">
+      <header>
+        <h2><span class="step">5</span> Cost vs H100</h2>
+      </header>
+      <div class="cost-controls">
+        <label>GPUs <input id="cost-gpus" type="number" min="1" max="8" step="1" value="1" /></label>
+        <label>Hours <input id="cost-hours" type="number" min="0.25" max="48" step="0.25" value="1.5" /></label>
+        <button id="run-cost">Quote</button>
+      </div>
+      <table id="cost-table" hidden>
+        <thead>
+          <tr><th>GPU</th><th>$/hr</th><th>GPUs</th><th>Hours</th><th>Total $</th><th>Fits BF16 bs=8 seq=4096?</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="cost-headline" class="headline" hidden></p>
+    </section>
+
+    <section id="step-deploy" class="card">
+      <header>
+        <h2><span class="step">6</span> Deploy</h2>
+        <span class="hint">push to GitHub &middot; provision MI300X &middot; sync to existing droplet</span>
+      </header>
+      <p class="prose">
+        One-click bridge from this laptop to <code>github.com/professor-codephreak/mindXtrain</code>
+        and onto an AMD Dev Cloud MI300X droplet. GitHub first so the cloud-init
+        bootstrap clones from a deterministic commit; then either provision a
+        fresh droplet (cloud-init runs <code>mindxtrain bench</code> as it boots)
+        or rsync to one you already own. All output streams over SSE.
+      </p>
+      <div class="deploy-grid">
+
+        <div class="deploy-card" id="deploy-github">
+          <h3>① Push to GitHub</h3>
+          <p class="hint deploy-status" id="github-status">checking&hellip;</p>
+          <p class="deploy-target mono" id="github-target"></p>
+          <div class="deploy-controls">
+            <label class="deploy-opt"><input type="checkbox" id="github-force" /> force-with-lease</label>
+            <button id="run-github" disabled>Push</button>
+            <button id="cancel-github" hidden>Stop</button>
+            <span id="github-badge" class="badge-status" hidden></span>
+          </div>
+          <pre class="code log-tail" id="github-log" hidden></pre>
+        </div>
+
+        <div class="deploy-card" id="deploy-provision">
+          <h3>② Provision MI300X droplet</h3>
+          <p class="hint deploy-status" id="provision-status">checking&hellip;</p>
+          <p class="deploy-target mono" id="provision-target"></p>
+          <div class="deploy-controls">
+            <button id="run-provision" disabled>Provision &amp; bench</button>
+            <button id="cancel-provision" hidden>Stop</button>
+            <span id="provision-badge" class="badge-status" hidden></span>
+          </div>
+          <pre class="code log-tail" id="provision-log" hidden></pre>
+        </div>
+
+        <div class="deploy-card" id="deploy-sync">
+          <h3>② Sync to existing droplet</h3>
+          <p class="hint deploy-status" id="sync-status">checking&hellip;</p>
+          <p class="deploy-target mono" id="sync-target"></p>
+          <div class="deploy-controls">
+            <button id="run-sync" disabled>Rsync &amp; bench</button>
+            <button id="cancel-sync" hidden>Stop</button>
+            <span id="sync-badge" class="badge-status" hidden></span>
+          </div>
+          <pre class="code log-tail" id="sync-log" hidden></pre>
+        </div>
+
+      </div>
+    </section>
+
+    <section id="step-chat" class="card">
+      <header>
+        <h2><span class="step">7</span> Try the model</h2>
+        <span class="hint" id="chat-status">probing&hellip;</span>
+      </header>
+      <p class="prose" id="chat-disabled-msg">
+        Chat is disabled until the inference backend reports ready.
+        Day-5 wiring boots vLLM-ROCm against the FP8-quantized checkpoint.
+      </p>
+      <div id="chat-form" hidden>
+        <textarea id="chat-input" rows="3" placeholder="Ask anything&hellip;"></textarea>
+        <button id="chat-send">Send</button>
+        <pre id="chat-response" class="code" hidden></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Apache-2.0 (MIT-compatible) &middot;
+      <a href="https://github.com/" target="_blank" rel="noopener">repo</a> &middot;
+      <a href="/docs" target="_blank" rel="noopener">OpenAPI</a> &middot;
+      AMD &times; lablab.ai hackathon, May 4&ndash;10 2026
+    </p>
+  </footer>
+
+  <script src="/coach/static/vendor/chart.umd.min.js"></script>
+  <script src="/coach/static/coach.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+# mindxtrain Kubernetes training job — single-MI300X.
+# Targets a node labeled `accelerator: mi300x` with 1 GPU.
+# Multi-node multi-GPU is post-hackathon.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mindxtrain-job
+  labels:
+    app: mindxtrain
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: mindxtrain
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        accelerator: mi300x
+      containers:
+        - name: trainer
+          image: mindxtrain/train:latest          # built from ops/containerfiles/containerfile_train
+          imagePullPolicy: IfNotPresent
+          args:
+            - train
+            - /workspace/run.yaml
+          env:
+            - { name: PYTORCH_ROCM_ARCH,  value: "gfx942" }
+            - { name: HSA_NO_SCRATCH_RECLAIM, value: "1" }
+            - { name: HIP_FORCE_DEV_KERNARG, value: "1" }
+            - { name: GPU_MAX_HW_QUEUES, value: "1" }
+            - { name: NVTE_CK_USES_BWD_V3, value: "1" }
+            - { name: NVTE_CK_IS_V3_ATOMIC_FP32, value: "1" }
+            - { name: PRIMUS_TURBO_ATTN_V3_ATOMIC_FP32, value: "1" }
+            - { name: NCCL_MIN_NCHANNELS, value: "112" }
+          resources:
+            limits:
+              amd.com/gpu: 1
+              memory: 256Gi
+              cpu: "16"
+            requests:
+              amd.com/gpu: 1
+              memory: 128Gi
+              cpu: "8"
+          volumeMounts:
+            - { name: run-config, mountPath: /workspace/run.yaml, subPath: run.yaml }
+            - { name: cache, mountPath: /root/.cache }
+            - { name: runs,  mountPath: /workspace/runs }
+      volumes:
+        - name: run-config
+          configMap:
+            name: mindxtrain-run-config
+        - name: cache
+          persistentVolumeClaim:
+            claimName: mindxtrain-cache-pvc
+        - name: runs
+          persistentVolumeClaim:
+            claimName: mindxtrain-runs-pvc
