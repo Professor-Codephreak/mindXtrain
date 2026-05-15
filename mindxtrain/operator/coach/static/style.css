@@ -64,6 +64,38 @@ main {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 1.25rem 1.5rem;
+  transition: border-color 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+  scroll-margin-top: 1rem;
+}
+
+/* Auto-advance step states. .active = the step the user is on; .done = a
+   completed step (kept visible for context); neither = pending. */
+.card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset, 0 4px 18px rgba(247, 146, 30, 0.12);
+}
+
+.card.done {
+  opacity: 0.78;
+  border-color: var(--ok);
+}
+
+.card.done > header h2 .step {
+  background: var(--ok);
+  color: #fff;
+}
+
+.card.done > header h2 .step::before {
+  content: "✓ ";
+  font-weight: 700;
+}
+
+.card:not(.active):not(.done) {
+  opacity: 0.72;
+}
+
+.card:not(.active):not(.done):hover {
+  opacity: 0.95;
 }
 
 .card > header {

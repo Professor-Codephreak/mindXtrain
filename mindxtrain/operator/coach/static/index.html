@@ -24,9 +24,41 @@
   </header>
 
   <main>
-    <section id="step-recipes" class="card">
+    <section id="step-preflight" class="card active" data-step-id="step-preflight">
       <header>
-        <h2><span class="step">1</span> Pick a recipe</h2>
+        <h2><span class="step">1</span> Preflight env</h2>
+        <span class="hint" id="preflight-summary">checking&hellip;</span>
+      </header>
+      <p class="prose">
+        Required: AMD Dev Cloud credentials (provision the MI300X droplet),
+        Hugging Face token + username (push the trained checkpoint).
+        Optional: mindX API key (auto-swap fallback), Lighthouse key (IPFS pin).
+        Values are not exposed &mdash; the endpoint only reports presence.
+      </p>
+      <ul id="preflight-list" class="summary"></ul>
+      <div class="train-controls">
+        <button id="run-preflight">Re-check</button>
+        <span id="preflight-badge" class="badge-status" hidden></span>
+      </div>
+    </section>
+
+    <section id="step-dream-corpus" class="card" data-step-id="step-dream-corpus">
+      <header>
+        <h2><span class="step">2</span> Dream corpus</h2>
+        <span class="hint" id="corpus-summary">waiting for preflight&hellip;</span>
+      </header>
+      <p class="prose">
+        The training data is mindX's dream-cycle JSONL output. This step
+        confirms the corpus path is reachable and has examples to train on.
+        Set <code>MINDXTRAIN_MINDX_HOME</code> to point at your mindX checkout.
+      </p>
+      <ul id="corpus-stats" class="summary" hidden></ul>
+      <p id="corpus-note" class="hint" hidden></p>
+    </section>
+
+    <section id="step-recipes" class="card" data-step-id="step-recipes">
+      <header>
+        <h2><span class="step">3</span> Pick a recipe</h2>
         <span class="hint" id="recipe-count"></span>
       </header>
       <div id="recipe-list" class="grid"></div>
@@ -36,9 +68,9 @@
       </details>
     </section>
 
-    <section id="step-autotune" class="card">
+    <section id="step-autotune" class="card" data-step-id="step-autotune">
       <header>
-        <h2><span class="step">2</span> Run the autotune probe</h2>
+        <h2><span class="step">4</span> Run the autotune probe</h2>
         <span class="hint">60&thinsp;s on MI300X &middot; CPU dry-run here</span>
       </header>
       <p class="prose">
@@ -52,9 +84,9 @@
       <ul id="plan-summary" class="summary" hidden></ul>
     </section>
 
-    <section id="step-compile" class="card">
+    <section id="step-compile" class="card" data-step-id="step-compile">
       <header>
-        <h2><span class="step">3</span> Compile to Axolotl YAML</h2>
+        <h2><span class="step">5</span> Compile to Axolotl YAML</h2>
         <span class="hint">requires: recipe + plan</span>
       </header>
       <p class="prose">
@@ -66,9 +98,9 @@
       <pre id="compile-yaml" class="code" hidden></pre>
     </section>
 
-    <section id="step-train" class="card">
+    <section id="step-train" class="card" data-step-id="step-train">
       <header>
-        <h2><span class="step">4</span> Train (live)</h2>
+        <h2><span class="step">6</span> Train (live)</h2>
         <span class="hint">requires: compile complete</span>
       </header>
       <p class="prose">
@@ -102,9 +134,9 @@
       </details>
     </section>
 
-    <section id="step-cost" class="card">
+    <section id="step-cost" class="card" data-step-id="step-cost">
       <header>
-        <h2><span class="step">5</span> Cost vs H100</h2>
+        <h2><span class="step">7</span> Cost vs H100</h2>
       </header>
       <div class="cost-controls">
         <label>GPUs <input id="cost-gpus" type="number" min="1" max="8" step="1" value="1" /></label>
@@ -120,9 +152,9 @@
       <p id="cost-headline" class="headline" hidden></p>
     </section>
 
-    <section id="step-deploy" class="card">
+    <section id="step-deploy" class="card" data-step-id="step-deploy">
       <header>
-        <h2><span class="step">6</span> Deploy</h2>
+        <h2><span class="step">8</span> Deploy</h2>
         <span class="hint">push to GitHub &middot; provision MI300X &middot; sync to existing droplet</span>
       </header>
       <p class="prose">
@@ -174,9 +206,9 @@
       </div>
     </section>
 
-    <section id="step-chat" class="card">
+    <section id="step-chat" class="card" data-step-id="step-chat">
       <header>
-        <h2><span class="step">7</span> Try the model</h2>
+        <h2><span class="step">9</span> Try the model</h2>
         <span class="hint" id="chat-status">probing&hellip;</span>
       </header>
       <p class="prose" id="chat-disabled-msg">

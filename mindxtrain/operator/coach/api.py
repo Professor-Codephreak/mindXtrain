@@ -231,6 +231,128 @@ async def api_health() -> CoachHealthResponse:
     )
 
 
+# ---- preflight + dream-corpus (training-run launch gate) ----------------
+
+# Env vars the Coach UI surfaces as a preflight gate before kicking off a
+# production training run. Required = the run will fail without them.
+# Optional = the run still works but post-train steps (publish to HF Hub,
+# Lighthouse pin, mindX fallback swap) silently no-op.
+_PREFLIGHT_REQUIRED = (
+    "AMD_DEV_CLOUD_TOKEN",
+    "AMD_DEV_CLOUD_SSH_KEY_ID",
+    "HF_TOKEN",
+    "HF_HUB_USERNAME",
+)
+_PREFLIGHT_OPTIONAL = (
+    "MINDXTRAIN_API_KEY",
+    "MINDXTRAIN_MINDX_HOME",
+    "LIGHTHOUSE_API_KEY",
+)
+
+
+class PreflightResponse(BaseModel):
+    """Per-env-var presence (no values exposed) + readiness summary."""
+
+    vars: dict[str, bool] = Field(
+        description="Which env vars are present (True) or unset (False).",
+    )
+    required: list[str] = Field(description="Subset of vars considered required.")
+    optional: list[str] = Field(description="Subset of vars considered optional.")
+    required_missing: list[str] = Field(
+        description="Required vars currently unset — the run is gated until these are populated.",
+    )
+    ready: bool = Field(description="True iff required_missing is empty.")
+
+
+class DreamCorpusResponse(BaseModel):
+    """Sanity check that mindX's dream-cycle JSONL corpus is reachable."""
+
+    root: str = Field(description="Filesystem root inspected.")
+    exists: bool
+    files: int = 0
+    raw_lines: int = 0
+    unique_rows: int = 0
+    ready: bool = Field(description="True iff exists and unique_rows > 0.")
+    note: str | None = Field(
+        default=None,
+        description="Friendly error message when the path is missing or empty.",
+    )
+
+
+@router.get("/api/preflight", response_model=PreflightResponse)
+async def api_preflight() -> PreflightResponse:
+    """Report which env vars the launch flow needs, without exposing values.
+
+    Used by the Coach UI's first step card to gate the training-run launch.
+    Returns `ready=False` when any required var is unset so the UI can halt
+    the auto-advance flow and prompt the operator to populate `.env`.
+    """
+    all_vars = list(_PREFLIGHT_REQUIRED) + list(_PREFLIGHT_OPTIONAL)
+    vars_present = {name: bool(os.environ.get(name, "").strip()) for name in all_vars}
+    required_missing = [n for n in _PREFLIGHT_REQUIRED if not vars_present[n]]
+    return PreflightResponse(
+        vars=vars_present,
+        required=list(_PREFLIGHT_REQUIRED),
+        optional=list(_PREFLIGHT_OPTIONAL),
+        required_missing=required_missing,
+        ready=not required_missing,
+    )
+
+
+@router.get("/api/dream-corpus", response_model=DreamCorpusResponse)
+async def api_dream_corpus(root: str | None = None) -> DreamCorpusResponse:
+    """Stats for the mindX dream-cycle JSONL corpus the recipe will consume.
+
+    Resolution order for the corpus root:
+    1. Explicit `?root=` query arg.
+    2. `$MINDXTRAIN_MINDX_HOME/data/memory` if the env var is set.
+    3. `/home/hacker/mindX/data/memory` (the documented default).
+
+    Returns `ready=False` with a `note` if the path doesn't exist or has no
+    unique rows yet (e.g. a fresh mindX install before its first dream cycle).
+    """
+    from mindxtrain.data.sources.mindx_dreams import count_mindx_dreams
+
+    if root is not None:
+        corpus_root = Path(root).expanduser()
+    else:
+        home = os.environ.get("MINDXTRAIN_MINDX_HOME", "/home/hacker/mindX")
+        corpus_root = Path(home).expanduser() / "data" / "memory"
+
+    if not corpus_root.exists():
+        return DreamCorpusResponse(
+            root=str(corpus_root),
+            exists=False,
+            ready=False,
+            note=(
+                f"corpus root not found: {corpus_root}. "
+                "Set MINDXTRAIN_MINDX_HOME or pass ?root=… to point at the "
+                "mindX data/memory directory."
+            ),
+        )
+
+    stats = count_mindx_dreams(corpus_root)
+    unique = stats["unique_rows"]
+    ready = unique > 0
+    note = (
+        None
+        if ready
+        else (
+            "corpus root exists but contains no dream JSONL — run a dream "
+            "cycle in mindX (agents/machine_dreaming.py) before training."
+        )
+    )
+    return DreamCorpusResponse(
+        root=str(corpus_root),
+        exists=True,
+        files=stats["files"],
+        raw_lines=stats["raw_lines"],
+        unique_rows=unique,
+        ready=ready,
+        note=note,
+    )
+
+
 # ---- live training runs (SSE) -------------------------------------------
 
 

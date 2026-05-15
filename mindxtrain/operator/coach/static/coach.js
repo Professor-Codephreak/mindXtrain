@@ -12,9 +12,72 @@ const state = {
   eventSource: null,   // active EventSource for the active run
   chart: null,         // Chart.js instance, if Chart is available
   logLines: 0,         // capped at MAX_LOG_LINES client-side
+  preflightReady: false,
+  corpusReady: false,
 };
 
 const MAX_LOG_LINES = 2000;
+
+// Ordered step ids — used by progressTo to compute "next" if a caller
+// doesn't pass one explicitly, and by syncPipelineHeader to pick a stage.
+const STEP_ORDER = [
+  "step-preflight",
+  "step-dream-corpus",
+  "step-recipes",
+  "step-autotune",
+  "step-compile",
+  "step-deploy",
+  "step-train",
+  "step-cost",
+  "step-chat",
+];
+
+// Map step ids to one of the three header pipeline stages.
+const STAGE_FOR_STEP = {
+  "step-preflight":    "automind",
+  "step-dream-corpus": "automind",
+  "step-recipes":      "mind",
+  "step-autotune":     "mind",
+  "step-compile":      "mind",
+  "step-deploy":       "mind",
+  "step-train":        "mind",
+  "step-cost":         "cust",
+  "step-chat":         "cust",
+};
+
+// --- auto-advance helpers ------------------------------------------------
+
+function syncPipelineHeader(activeStepId) {
+  const want = STAGE_FOR_STEP[activeStepId];
+  if (!want) return;
+  $$(".pipeline .stage").forEach((node) => {
+    node.classList.toggle("active", node.dataset.stage === want);
+  });
+}
+
+// Mark previous active card .done, mark `id` .active, scroll into view, sync
+// the header pipeline. Safe to call repeatedly; idempotent for the same id.
+function progressTo(id) {
+  const next = document.getElementById(id);
+  if (!next) return;
+  $$("section.card.active").forEach((c) => {
+    if (c.id !== id) {
+      c.classList.remove("active");
+      c.classList.add("done");
+    }
+  });
+  next.classList.remove("done");
+  next.classList.add("active");
+  next.scrollIntoView({ behavior: "smooth", block: "start" });
+  syncPipelineHeader(id);
+}
+
+function markCardDone(id) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.classList.remove("active");
+  node.classList.add("done");
+}
 
 async function getJSON(url) {
   const r = await fetch(url);
@@ -32,7 +95,92 @@ async function postJSON(url, body) {
   return r.json();
 }
 
-// --- step 1: recipes -----------------------------------------------------
+// --- step 1: preflight env --------------------------------------------------
+
+async function runPreflight() {
+  const btn = $("#run-preflight");
+  const summary = $("#preflight-summary");
+  const list = $("#preflight-list");
+  const badge = $("#preflight-badge");
+  if (btn) btn.disabled = true;
+  summary.textContent = "checking…";
+  try {
+    const res = await getJSON("/coach/api/preflight");
+    list.innerHTML = "";
+    for (const name of [...res.required, ...res.optional]) {
+      const present = !!res.vars[name];
+      const li = document.createElement("li");
+      const mark = present ? "✓" : "✗";
+      const cls = present ? "fits-yes" : "fits-no";
+      const tag = res.required.includes(name) ? "required" : "optional";
+      li.innerHTML = `<span class="${cls}">${mark}</span> <code>${name}</code> <span class="muted">${tag}</span>`;
+      list.appendChild(li);
+    }
+    state.preflightReady = res.ready;
+    if (res.ready) {
+      summary.textContent = `all required env vars set (${res.required.length})`;
+      badge.textContent = "ready";
+      badge.className = "badge-status succeeded";
+      badge.hidden = false;
+      markCardDone("step-preflight");
+      // Auto-advance to corpus check.
+      progressTo("step-dream-corpus");
+      runDreamCorpus();
+    } else {
+      summary.textContent = `missing: ${res.required_missing.join(", ")}`;
+      badge.textContent = "not ready";
+      badge.className = "badge-status failed";
+      badge.hidden = false;
+    }
+  } catch (e) {
+    summary.textContent = `preflight probe failed: ${e}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// --- step 2: dream corpus ---------------------------------------------------
+
+async function runDreamCorpus() {
+  const summary = $("#corpus-summary");
+  const stats = $("#corpus-stats");
+  const note = $("#corpus-note");
+  summary.textContent = "counting…";
+  try {
+    const res = await getJSON("/coach/api/dream-corpus");
+    stats.innerHTML = "";
+    const fields = [
+      ["root", res.root],
+      ["files", res.files],
+      ["raw_lines", res.raw_lines],
+      ["unique_rows", res.unique_rows],
+    ];
+    for (const [k, v] of fields) {
+      const li = document.createElement("li");
+      li.innerHTML = `<code>${k}</code>=${v}`;
+      stats.appendChild(li);
+    }
+    stats.hidden = false;
+    state.corpusReady = res.ready;
+    if (res.note) {
+      note.textContent = res.note;
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+    if (res.ready) {
+      summary.textContent = `${res.unique_rows} unique examples ready`;
+      markCardDone("step-dream-corpus");
+      progressTo("step-recipes");
+    } else {
+      summary.textContent = "corpus not ready — see note";
+    }
+  } catch (e) {
+    summary.textContent = `corpus probe failed: ${e}`;
+  }
+}
+
+// --- step 3: recipes -----------------------------------------------------
 
 async function loadRecipes() {
   const list = await getJSON("/coach/api/recipes");
@@ -68,6 +216,14 @@ async function selectRecipe(name) {
   det.hidden = false;
   det.open = true;
   $("#run-compile").disabled = state.plan === null;
+  // Auto-advance: recipe picked → autotune. Run bench automatically if not
+  // already done; users who want to re-pick can click another recipe (this
+  // function is re-entrant and resets compileResult).
+  markCardDone("step-recipes");
+  progressTo("step-autotune");
+  if (state.plan === null) {
+    runBench();
+  }
 }
 
 // --- step 2: autotune ----------------------------------------------------
@@ -97,6 +253,12 @@ async function runBench() {
     }
     sum.hidden = false;
     $("#run-compile").disabled = state.recipe === null;
+    // Auto-advance: plan in hand → compile.
+    if (state.recipe) {
+      markCardDone("step-autotune");
+      progressTo("step-compile");
+      runCompile();
+    }
   } finally {
     $("#run-bench").disabled = false;
     $("#run-bench").textContent = "Re-run autotune";
@@ -125,6 +287,12 @@ async function runCompile() {
     $("#compile-yaml").textContent = JSON.stringify(res.axolotl_yaml, null, 2);
     $("#compile-yaml").hidden = false;
     $("#run-train").disabled = false;
+    // Auto-advance: ready to deploy. Stop here for manual GitHub-push click —
+    // we don't auto-push, that's an explicit spend authorization.
+    markCardDone("step-compile");
+    progressTo("step-deploy");
+    const ghBtn = $("#run-github");
+    if (ghBtn && !ghBtn.disabled) ghBtn.focus();
   } finally {
     $("#run-compile").disabled = false;
   }
@@ -209,6 +377,11 @@ function subscribeRun(runId) {
       state.eventSource = null;
       $("#cancel-train").hidden = true;
       $("#run-train").disabled = false;
+      if (ev.status === "succeeded") {
+        markCardDone("step-train");
+        // Train succeeded — let the user reach for Cost / Chat next.
+        progressTo("step-cost");
+      }
     }
   });
   es.addEventListener("error", () => {
@@ -404,7 +577,7 @@ async function refreshDropletStatus() {
   }
 }
 
-async function runDeploy({ url, body, slot, runBtn, cancelBtn, logEl, badgeEl }) {
+async function runDeploy({ url, body, slot, runBtn, cancelBtn, logEl, badgeEl, onSuccess }) {
   runBtn.disabled = true;
   cancelBtn.hidden = false;
   try {
@@ -428,7 +601,12 @@ async function runDeploy({ url, body, slot, runBtn, cancelBtn, logEl, badgeEl })
     deploy[slot].runId = run.id;
     deploy[slot].es = attachDeployStream(run.id, {
       logEl, badgeEl, cancelBtn, runBtn,
-      onTerminal: () => { deploy[slot].es = null; },
+      onTerminal: (ev) => {
+        deploy[slot].es = null;
+        if (ev.status === "succeeded" && typeof onSuccess === "function") {
+          onSuccess();
+        }
+      },
     });
   } catch (e) {
     badgeEl.textContent = "failed";
@@ -461,6 +639,12 @@ function runGithubPush() {
     cancelBtn: $("#cancel-github"),
     logEl: $("#github-log"),
     badgeEl: $("#github-badge"),
+    onSuccess: () => {
+      // Focus the next deploy action — provision is the production path on
+      // a fresh MI300X; sync is the alternative if the user already has one.
+      const pBtn = $("#run-provision");
+      if (pBtn && !pBtn.disabled) pBtn.focus();
+    },
   });
 }
 
@@ -473,6 +657,12 @@ function runDropletProvision() {
     cancelBtn: $("#cancel-provision"),
     logEl: $("#provision-log"),
     badgeEl: $("#provision-badge"),
+    onSuccess: () => {
+      // Cloud-init runs `mindxtrain bench` + `train` on the droplet —
+      // training has begun. Move user to the live Train card.
+      markCardDone("step-deploy");
+      progressTo("step-train");
+    },
   });
 }
 
@@ -485,6 +675,10 @@ function runDropletSync() {
     cancelBtn: $("#cancel-sync"),
     logEl: $("#sync-log"),
     badgeEl: $("#sync-badge"),
+    onSuccess: () => {
+      markCardDone("step-deploy");
+      progressTo("step-train");
+    },
   });
 }
 
@@ -537,6 +731,7 @@ async function sendChat() {
 // --- bootstrap -----------------------------------------------------------
 
 window.addEventListener("DOMContentLoaded", () => {
+  $("#run-preflight").addEventListener("click", runPreflight);
   $("#run-bench").addEventListener("click", runBench);
   $("#run-compile").addEventListener("click", runCompile);
   $("#run-train").addEventListener("click", runTrain);
@@ -552,8 +747,14 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#run-sync").addEventListener("click", runDropletSync);
   $("#cancel-sync").addEventListener("click", () => cancelDeploy("sync", $("#cancel-sync")));
 
+  // Start the auto-advance chain at the top. Each step's success handler
+  // calls progressTo(...) for the next step. loadRecipes runs eagerly so
+  // the recipe list is rendered even if preflight/corpus fail — the user
+  // can still see what's available.
+  syncPipelineHeader("step-preflight");
   loadRecipes();
   probeChat();
   refreshGithubStatus();
   refreshDropletStatus();
+  runPreflight();
 });
