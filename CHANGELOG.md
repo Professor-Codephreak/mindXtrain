@@ -4,6 +4,48 @@ All notable changes to **mindxtrain** are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **mindX self-training loop.** `mindx_dreams` dataset source adapter walks
+  `<mindx>/data/memory/ltm/*/*_training.jsonl`, deduplicates by content hash,
+  and yields OpenAI-chat rows. Pure stdlib; no GPU/heavy deps to load
+  (`mindxtrain.data.sources.mindx_dreams`).
+- **CPU training lane** (`mindxtrain.train.backend_trl_cpu.run_trl_cpu`).
+  Real TRL SFT/LoRA on CPU, produces a real HF-format checkpoint compatible
+  with `quantize`/`receipt`/`publish`. Wired via `TrainingBackend = "trl_cpu"`.
+- **Public training-jobs API** at `/v1/training/jobs` with bearer auth
+  (`MINDXTRAIN_API_KEY`). Versioned facade over the same `RunRegistry` Coach
+  uses, so mindX agents and external clients become peer dispatchers
+  (`mindxtrain.operator.training_api`).
+- **mindX fallback-swap caller** (`mindxtrain.deploy.api_client.swap_mindx_fallback_model`).
+  PATCHes mindX's `/v1/config/fallback-model` so a freshly published HF Hub
+  checkpoint becomes mindX's active default without a source edit. Pairs with
+  the mindX-side endpoint shipped in AgenticPlace/mindX@ad8193ea3.
+- Two new YAML recipes: `mindx_fallback_qwen3_1_5b_sft_lora` (Qwen3-1.5B
+  LoRA on MI300X, the production target) and `mindx_fallback_qwen3_1_5b_cpu`
+  (SmolLM2-135M CPU smoke).
+- `.env.example`: `MINDXTRAIN_API_KEY` and `MINDXTRAIN_MINDX_HOME`.
+
+### Changed
+
+- Schema: `DataSource` extends to include `"mindx_dreams"`; `DataCfg.hf_id`
+  is now defaultable with a `model_validator` requiring it only for
+  `source: "hf"`; `DataCfg.path` added (used by `local` + `mindx_dreams`).
+- `HardwareCfg.gpus: Literal[0, 1, 8]` — `0` = CPU lane.
+- Production URL flipped from `mindx.pythai.net/hackathon` to
+  `mindx.pythai.net/coach`. Hackathon-era references preserved in
+  `HACKATHON.md` and the build-in-public posts for the historical record.
+- CI: ruff scoped to `mindxtrain/ tests/`; mypy points at the canonical
+  `mindxtrain/config mindxtrain/provenance` (fixing stale paths). Container
+  build added on push-to-main; GHCR publish on tag.
+
+### Notes
+
+- Adapter smoke against the real corpus saw 1051 unique rows in
+  `/home/hacker/mindX/data/memory` (corpus snapshot 2026-05-14).
+
 ## [0.1.0] — 2026-05-06
 
 Initial public release. Submitted to the AMD × lablab.ai Developer Hackathon
