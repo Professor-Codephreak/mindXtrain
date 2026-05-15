@@ -149,11 +149,12 @@ async function runDreamCorpus() {
   try {
     const res = await getJSON("/coach/api/dream-corpus");
     stats.innerHTML = "";
+    const con = res.consolidation || { files: 0, raw_lines: 0, unique_rows: 0 };
+    const evo = res.evolutions || { files: 0, raw_lines: 0, unique_rows: 0 };
     const fields = [
       ["root", res.root],
-      ["files", res.files],
-      ["raw_lines", res.raw_lines],
-      ["unique_rows", res.unique_rows],
+      ["consolidation", `${con.unique_rows} unique / ${con.files} files`],
+      ["evolutions", `${evo.unique_rows} unique / ${evo.files} files`],
     ];
     for (const [k, v] of fields) {
       const li = document.createElement("li");
@@ -169,7 +170,11 @@ async function runDreamCorpus() {
       note.hidden = true;
     }
     if (res.ready) {
-      summary.textContent = `${res.unique_rows} unique examples ready`;
+      const total = con.unique_rows + evo.unique_rows;
+      const detail = evo.unique_rows > 0
+        ? `${con.unique_rows} consolidation + ${evo.unique_rows} evolution`
+        : `${con.unique_rows} consolidation`;
+      summary.textContent = `${total} unique examples ready (${detail})`;
       markCardDone("step-dream-corpus");
       progressTo("step-recipes");
     } else {

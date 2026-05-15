@@ -24,10 +24,35 @@ from mindxtrain.config.schema import DataCfg
 def load_streaming_dataset(cfg: DataCfg) -> Iterator[dict[str, Any]]:
     """Yield rows for the configured `DataCfg.source` one at a time."""
     if cfg.source == "mindx_dreams":
-        from mindxtrain.data.sources.mindx_dreams import iter_mindx_dreams
+        from mindxtrain.data.sources.mindx_dreams import (
+            iter_mindx_dreams,
+            iter_mindx_evolutions,
+        )
 
         assert cfg.path is not None  # validated by DataCfg
-        yield from iter_mindx_dreams(cfg.path, max_samples=cfg.max_samples)
+        # Two-stream yield with a SHARED budget so max_samples caps the
+        # combined corpus, not each stream individually. Consolidation rows
+        # come first (richer base signal), evolutions follow when opted in.
+        cap = cfg.max_samples
+        emitted = 0
+        remaining = (cap - emitted) if cap is not None else None
+        for row in iter_mindx_dreams(cfg.path, max_samples=remaining):
+            yield row
+            emitted += 1
+            if cap is not None and emitted >= cap:
+                return
+        if cfg.include_evolutions:
+            remaining = (cap - emitted) if cap is not None else None
+            try:
+                for row in iter_mindx_evolutions(cfg.path, max_samples=remaining):
+                    yield row
+                    emitted += 1
+                    if cap is not None and emitted >= cap:
+                        return
+            except FileNotFoundError:
+                # mindx_dreams already succeeded above, so the root exists —
+                # this would only fire on a path race. Swallow silently.
+                pass
         return
 
     if cfg.source == "local":

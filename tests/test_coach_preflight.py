@@ -75,13 +75,17 @@ def test_preflight_does_not_echo_values(monkeypatch):
 # ---- dream-corpus ----------------------------------------------------------
 
 
-def _seed_corpus(tmp_path: Path, n_examples: int) -> Path:
-    """Build a minimal LTM tree shaped like mindX/data/memory."""
+def _seed_corpus(tmp_path: Path, n_examples: int, n_evolutions: int = 0) -> Path:
+    """Build a minimal LTM tree shaped like mindX/data/memory.
+
+    Writes `n_examples` consolidation rows and (optionally) `n_evolutions`
+    proposal rows so we can exercise the two-bucket response shape.
+    """
     root = tmp_path / "data" / "memory"
     ltm = root / "ltm" / "agent_a"
     ltm.mkdir(parents=True)
-    jsonl = ltm / "20260514_010000_training.jsonl"
-    with jsonl.open("w") as fh:
+    train = ltm / "20260514_010000_training.jsonl"
+    with train.open("w") as fh:
         for i in range(n_examples):
             fh.write(
                 json.dumps({
@@ -93,6 +97,20 @@ def _seed_corpus(tmp_path: Path, n_examples: int) -> Path:
                 })
                 + "\n"
             )
+    if n_evolutions:
+        evo = ltm / "20260514_010001_evolutions.jsonl"
+        with evo.open("w") as fh:
+            for i in range(n_evolutions):
+                fh.write(
+                    json.dumps({
+                        "messages": [
+                            {"role": "system", "content": "evo"},
+                            {"role": "user", "content": f"insight{i}"},
+                            {"role": "assistant", "content": f"proposal{i}"},
+                        ]
+                    })
+                    + "\n"
+                )
     return root
 
 
@@ -103,10 +121,36 @@ def test_dream_corpus_uses_env_root(monkeypatch, tmp_path):
     assert r.status_code == 200
     data = r.json()
     assert data["exists"] is True
-    assert data["unique_rows"] == 5
+    assert data["consolidation"]["unique_rows"] == 5
+    assert data["evolutions"]["unique_rows"] == 0
     assert data["ready"] is True
     assert data["note"] is None
     assert data["root"] == str(root)
+
+
+def test_dream_corpus_reports_both_buckets(monkeypatch, tmp_path):
+    """Two-bucket shape: consolidation + evolutions independently."""
+    _seed_corpus(tmp_path, n_examples=5, n_evolutions=3)
+    monkeypatch.setenv("MINDXTRAIN_MINDX_HOME", str(tmp_path))
+    r = client.get("/coach/api/dream-corpus")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["consolidation"]["unique_rows"] == 5
+    assert data["consolidation"]["files"] == 1
+    assert data["evolutions"]["unique_rows"] == 3
+    assert data["evolutions"]["files"] == 1
+    assert data["ready"] is True
+
+
+def test_dream_corpus_ready_with_evolutions_only(monkeypatch, tmp_path):
+    """Backward compat-adjacent: ready=True if EITHER bucket has rows."""
+    _seed_corpus(tmp_path, n_examples=0, n_evolutions=4)
+    monkeypatch.setenv("MINDXTRAIN_MINDX_HOME", str(tmp_path))
+    r = client.get("/coach/api/dream-corpus")
+    data = r.json()
+    assert data["consolidation"]["unique_rows"] == 0
+    assert data["evolutions"]["unique_rows"] == 4
+    assert data["ready"] is True
 
 
 def test_dream_corpus_explicit_root_arg(monkeypatch, tmp_path):
@@ -116,7 +160,7 @@ def test_dream_corpus_explicit_root_arg(monkeypatch, tmp_path):
     assert r.status_code == 200
     data = r.json()
     assert data["root"] == str(root)
-    assert data["unique_rows"] == 3
+    assert data["consolidation"]["unique_rows"] == 3
     assert data["ready"] is True
 
 
@@ -138,7 +182,8 @@ def test_dream_corpus_empty_tree_reports_not_ready(monkeypatch, tmp_path):
     assert r.status_code == 200
     data = r.json()
     assert data["exists"] is True
-    assert data["unique_rows"] == 0
+    assert data["consolidation"]["unique_rows"] == 0
+    assert data["evolutions"]["unique_rows"] == 0
     assert data["ready"] is False
     assert data["note"] is not None
     assert "dream cycle" in data["note"].lower()

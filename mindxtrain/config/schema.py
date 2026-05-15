@@ -165,6 +165,14 @@ class DataCfg(BaseModel):
     packing: bool = True
     dedupe: DedupeCfg = Field(default_factory=DedupeCfg)
     shard: ShardCfg = Field(default_factory=ShardCfg)
+    include_evolutions: bool = Field(
+        default=False,
+        description=(
+            "When source='mindx_dreams', also pull *_evolutions.jsonl "
+            "proposals alongside *_training.jsonl consolidation rows. "
+            "max_samples caps the combined total."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_source_inputs(self) -> DataCfg:

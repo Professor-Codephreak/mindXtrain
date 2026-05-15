@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 _DEFAULT_GLOB = "ltm/**/*_training.jsonl"
+_EVOLUTIONS_GLOB = "ltm/**/*_evolutions.jsonl"
 
 
 def _row_fingerprint(row: dict[str, Any]) -> str:
@@ -121,4 +122,36 @@ def count_mindx_dreams(root: Path, *, glob: str = _DEFAULT_GLOB) -> dict[str, in
     return {"files": files, "raw_lines": raw_lines, "unique_rows": unique}
 
 
-__all__ = ["count_mindx_dreams", "iter_mindx_dreams"]
+def iter_mindx_evolutions(
+    root: Path,
+    *,
+    max_samples: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield deduplicated chat-format rows from a mindX evolution-proposal tree.
+
+    Peer of `iter_mindx_dreams` for the new dream-cycle phase that emits
+    `<agent>_evolutions.jsonl` files alongside the consolidation training
+    JSONL. Schema is identical (OpenAI chat); content is an evolution
+    suggestion derived from the agent's top-scored insights.
+
+    Same dedup semantics as the consolidation source — identical proposals
+    emitted across cycles collapse to a single row.
+    """
+    yield from iter_mindx_dreams(root, glob=_EVOLUTIONS_GLOB, max_samples=max_samples)
+
+
+def count_mindx_evolutions(root: Path) -> dict[str, int]:
+    """Cheap statistics about an evolution-proposal corpus root.
+
+    Same shape as `count_mindx_dreams` (files / raw_lines / unique_rows) so
+    the Coach corpus card can render both buckets uniformly.
+    """
+    return count_mindx_dreams(root, glob=_EVOLUTIONS_GLOB)
+
+
+__all__ = [
+    "count_mindx_dreams",
+    "count_mindx_evolutions",
+    "iter_mindx_dreams",
+    "iter_mindx_evolutions",
+]

@@ -41,6 +41,10 @@ model:
 data:
   source: mindx_dreams
   path: /home/hacker/mindX/data/memory
+  # Pull both *_training.jsonl (consolidation) and *_evolutions.jsonl
+  # (proposals) from each dream cycle so the fallback model learns BOTH
+  # the STM → insight distillation AND the insights → evolution mapping.
+  include_evolutions: true
   seq_len: 2048
   packing: true
   dedupe:

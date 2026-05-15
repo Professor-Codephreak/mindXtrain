@@ -264,15 +264,32 @@ class PreflightResponse(BaseModel):
     ready: bool = Field(description="True iff required_missing is empty.")
 
 
-class DreamCorpusResponse(BaseModel):
-    """Sanity check that mindX's dream-cycle JSONL corpus is reachable."""
+class CorpusBucketStats(BaseModel):
+    """File / line / unique-row counts for one bucket of dream-cycle output."""
 
-    root: str = Field(description="Filesystem root inspected.")
-    exists: bool
     files: int = 0
     raw_lines: int = 0
     unique_rows: int = 0
-    ready: bool = Field(description="True iff exists and unique_rows > 0.")
+
+
+class DreamCorpusResponse(BaseModel):
+    """Sanity check that mindX's dream-cycle JSONL corpus is reachable.
+
+    The dream cycle writes two JSONL streams per cycle:
+    - `*_training.jsonl` — STM-to-insight consolidation (phase 5b)
+    - `*_evolutions.jsonl` — insight-to-evolution proposals (phase 5c)
+
+    Both are reported here; a recipe with `data.include_evolutions: true`
+    consumes the union.
+    """
+
+    root: str = Field(description="Filesystem root inspected.")
+    exists: bool
+    consolidation: CorpusBucketStats = Field(default_factory=CorpusBucketStats)
+    evolutions: CorpusBucketStats = Field(default_factory=CorpusBucketStats)
+    ready: bool = Field(
+        description="True iff exists and at least one bucket has unique rows.",
+    )
     note: str | None = Field(
         default=None,
         description="Friendly error message when the path is missing or empty.",
@@ -311,7 +328,10 @@ async def api_dream_corpus(root: str | None = None) -> DreamCorpusResponse:
     Returns `ready=False` with a `note` if the path doesn't exist or has no
     unique rows yet (e.g. a fresh mindX install before its first dream cycle).
     """
-    from mindxtrain.data.sources.mindx_dreams import count_mindx_dreams
+    from mindxtrain.data.sources.mindx_dreams import (
+        count_mindx_dreams,
+        count_mindx_evolutions,
+    )
 
     if root is not None:
         corpus_root = Path(root).expanduser()
@@ -331,9 +351,9 @@ async def api_dream_corpus(root: str | None = None) -> DreamCorpusResponse:
             ),
         )
 
-    stats = count_mindx_dreams(corpus_root)
-    unique = stats["unique_rows"]
-    ready = unique > 0
+    consolidation = CorpusBucketStats(**count_mindx_dreams(corpus_root))
+    evolutions = CorpusBucketStats(**count_mindx_evolutions(corpus_root))
+    ready = (consolidation.unique_rows + evolutions.unique_rows) > 0
     note = (
         None
         if ready
@@ -345,9 +365,8 @@ async def api_dream_corpus(root: str | None = None) -> DreamCorpusResponse:
     return DreamCorpusResponse(
         root=str(corpus_root),
         exists=True,
-        files=stats["files"],
-        raw_lines=stats["raw_lines"],
-        unique_rows=unique,
+        consolidation=consolidation,
+        evolutions=evolutions,
         ready=ready,
         note=note,
     )
