@@ -5,10 +5,13 @@ Exposes:
     GET  /health                  — liveness check
     POST /v1/chat/completions     — OpenAI-compatible chat
     POST /v1/agentic              — mindX-native agentic dispatch (Day 5+)
+    /v1/training/jobs/*           — public training-jobs API (mindX agents,
+                                    external clients). Bearer auth via
+                                    MINDXTRAIN_API_KEY when set.
     GET  /coach/*                 — Coach UI + API (recipes, autotune, cost)
 
-Day 1 ships the route shapes, /health, and the Coach UI; Day 5 wires real
-backend dispatch.
+The production deployment lives at https://mindx.pythai.net — the Coach UI
+is at /coach/ and the public training-jobs API is at /v1/training/jobs.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from pydantic import BaseModel
 from mindxtrain import __version__
 from mindxtrain.models.registry import ChatRequest, ChatResponse, build_backend
 from mindxtrain.operator.coach import router as coach_router
+from mindxtrain.operator.training_api import router as training_router
 
 app = FastAPI(
     title="automindXtrain",
@@ -36,6 +40,7 @@ app = FastAPI(
 _COACH_STATIC = Path(__file__).parent / "coach" / "static"
 app.mount("/coach/static", StaticFiles(directory=_COACH_STATIC), name="coach-static")
 app.include_router(coach_router)
+app.include_router(training_router)
 
 
 @app.get("/", include_in_schema=False)

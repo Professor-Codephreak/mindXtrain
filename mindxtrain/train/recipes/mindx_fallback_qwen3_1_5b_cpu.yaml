@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0
+# CPU smoke variant of the mindX local-fallback recipe.
+#
+# Purpose: verify the dream-corpus → tokenize → SFT → checkpoint → manifest
+# loop closes on a CPU-only laptop before burning AMD credits on the real
+# MI300X run. Same dataset, much smaller base, shorter sequence, one epoch.
+#
+# Wall time: 10-30 min depending on host. Produces a real (low-quality) HF-
+# format checkpoint suitable for `mindxtrain receipt` round-trip.
+meta:
+  project: mindx_self_training
+  run_name: mindx_fallback_qwen3_1_5b_cpu_smoke
+  seed: 2048
+  license: apache-2.0
+  description: >-
+    CPU smoke run of the dream-corpus loop. Not for production serving;
+    exists to keep the end-to-end pipeline green without GPU.
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 0
+  expected_hbm_gb: 192
+
+autotune:
+  enabled: false
+  budget_seconds: 60
+  policy: aot_only
+
+model:
+  name: HuggingFaceTB/SmolLM2-135M
+  attn_implementation: eager
+  torch_dtype: float32
+  trust_remote_code: false
+
+data:
+  source: mindx_dreams
+  path: /home/hacker/mindX/data/memory
+  max_samples: 256
+  seq_len: 512
+  packing: false
+
+train:
+  backend: trl_cpu
+  method:
+    kind: lora
+    r: 8
+    alpha: 16
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  optimizer:
+    name: adamw_torch
+    lr: 1.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 1
+  batch:
+    per_device: 1
+    grad_accum: 4
+  precision: float32
+  gradient_checkpointing: false
+  flash_attention:
+    backend: ck
+  fsdp:
+    enabled: false
+  env:
+    PYTORCH_ROCM_ARCH: "gfx942"
+    HSA_NO_SCRATCH_RECLAIM: "1"
+    HIP_FORCE_DEV_KERNARG: "1"
+
+eval:
+  harness:
+    tasks: [mmlu]
+    fewshot: 0
+  regression:
+    baseline: ""
+    threshold_pct: -100.0
+
+quantize:
+  enabled: false
+  scheme: none
+  ptpc: false
+
+serve:
+  backend: vllm-rocm
+  reasoning_parser: none
+  tool_call_parser: none
+  tensor_parallel: 1
+  max_model_len: 2048
+  port: 8000
+
+publish:
+  enabled: false
+
+receipt:
+  output: ./out/receipt.json
+  include:
+    - yaml_hash
+    - dataset_cids

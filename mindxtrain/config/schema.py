@@ -23,17 +23,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, model_validator
 
 # ---- enums / literals -------------------------------------------------------
 
 GfxArch = Literal["gfx942", "gfx950"]
 HardwareName = Literal["mi300x", "mi325x", "mi350x", "mi355x"]
-TrainingBackend = Literal["axolotl", "unsloth", "torchtune", "primus"]
+TrainingBackend = Literal["axolotl", "unsloth", "torchtune", "primus", "trl_cpu"]
 DType = Literal["bfloat16", "float16", "float32", "fp8_e4m3", "mxfp4"]
 AttentionBackend = Literal["ck", "triton", "aiter"]
 AttnImplementation = Literal["flash_attention_2", "sdpa", "eager"]
-DataSource = Literal["hf", "local", "lighthouse"]
+DataSource = Literal["hf", "local", "lighthouse", "mindx_dreams"]
 QuantScheme = Literal["quark_fp8", "quark_mxfp4", "gptq_rocm", "none"]
 ServeBackend = Literal["vllm-rocm", "sglang"]
 ReasoningParser = Literal["deepseek_r1", "qwen3", "none"]
@@ -83,9 +83,12 @@ class HardwareCfg(BaseModel):
 
     name: HardwareName = "mi300x"
     gfx_arch: GfxArch = "gfx942"
-    gpus: Literal[1, 8] = Field(
+    gpus: Literal[0, 1, 8] = Field(
         default=1,
-        description="MI300X xGMI gotcha: only 1 or 8 GPU FSDP groups are safe; 2/4 is asymmetric.",
+        description=(
+            "0 = CPU lane (mindX self-training, smoke runs). "
+            "1 or 8 = MI300X. 2/4 rejected: xGMI bandwidth is asymmetric."
+        ),
     )
     expected_hbm_gb: int = Field(default=192, ge=64)
 
@@ -144,7 +147,17 @@ class DataCfg(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source: DataSource = "hf"
-    hf_id: str = Field(description="HF dataset ID, e.g. tatsu-lab/alpaca")
+    hf_id: str = Field(
+        default="",
+        description="HF dataset ID (e.g. tatsu-lab/alpaca). Required when source='hf'.",
+    )
+    path: Path | None = Field(
+        default=None,
+        description=(
+            "Filesystem root. Required when source='local' or 'mindx_dreams'. "
+            "For mindx_dreams: the mindX `data/memory` directory."
+        ),
+    )
     split: str = "train"
     streaming: bool = True
     max_samples: int | None = Field(default=None, ge=1)
@@ -152,6 +165,16 @@ class DataCfg(BaseModel):
     packing: bool = True
     dedupe: DedupeCfg = Field(default_factory=DedupeCfg)
     shard: ShardCfg = Field(default_factory=ShardCfg)
+
+    @model_validator(mode="after")
+    def _check_source_inputs(self) -> DataCfg:
+        if self.source == "hf" and not self.hf_id:
+            msg = "data.hf_id is required when data.source='hf'"
+            raise ValueError(msg)
+        if self.source in {"local", "mindx_dreams"} and self.path is None:
+            msg = f"data.path is required when data.source='{self.source}'"
+            raise ValueError(msg)
+        return self
 
 
 # ---- train (discriminated method) ------------------------------------------

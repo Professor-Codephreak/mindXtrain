@@ -202,7 +202,12 @@ forge script script/Deploy.s.sol \
 Once `MINDXTRAIN_REGISTRY_ADDR` is set, `mindxtrain.provenance.erc8004.broadcast_attestation`
 can anchor the manifest BLAKE3 on-chain.
 
-## 9. Serve the model + wire the demo URL
+## 9. Serve the model + wire the production URL
+
+The production URL post-hackathon is `https://mindx.pythai.net` — the Coach
+UI is at `/coach/` and the public training-jobs API is at `/v1/training/jobs`.
+The hackathon-era `/hackathon` prefix is preserved in `HACKATHON.md` and the
+build-in-public posts but is no longer the canonical entry point.
 
 ```bash
 # Inside the rocm/vllm-dev container:
@@ -211,13 +216,19 @@ podman-compose -f ops/compose/compose_dev.yaml up -d
 
 # Verify locally:
 curl http://localhost:8080/coach/api/health
-# → {"coach_version":"0.1.0", "recipes_available":12, ...}
+# → {"coach_version":"0.1.0", "recipes_available":>=14, ...}
 
-# Reverse-proxy `mindx.pythai.net/hackathon` → MI300X:8080
-# (set up via Caddy/Cloudflare; specifics depend on your DNS provider)
+# Public training-jobs API smoke (bearer auth via MINDXTRAIN_API_KEY):
+curl -X POST http://localhost:8080/v1/training/jobs \
+  -H "Authorization: Bearer $MINDXTRAIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"recipe":"mindx_fallback_qwen3_1_5b_cpu"}'
+# → {"job_id":"...", "status":"running", "backend":"trl_cpu", ...}
+
+# Reverse-proxy mindx.pythai.net → MI300X:8080 (Caddy/Cloudflare).
 ```
 
-Once the proxy is live, `curl mindx.pythai.net/hackathon/coach/api/health`
+Once the proxy is live, `curl https://mindx.pythai.net/coach/api/health`
 returns 200 from the public internet.
 
 ## 10. Hackathon submission

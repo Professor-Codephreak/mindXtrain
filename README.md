@@ -10,23 +10,24 @@ LLaMA-Factory, Unsloth, torchtune and Primus is its **60-second AOT autotune
 probe**: CK-vs-Triton attention, hipBLASLt heuristic, RCCL config — the plan
 is fixed at training start, JIT autotune is forbidden in the production loop.
 
-**Status**: scaffolded, single canonical package, 112/112 tests pass, ruff
-clean. ~38 modules ship as real Python on a CPU-only laptop; heavyweight
-training, eval, and quantization paths gate on opt-in extra dep groups.
-See [`docs/actualization_status.md`](docs/actualization_status.md) for the
+**Status**: production deployment in progress. 207/207 tests pass, ruff clean.
+~38 modules ship as real Python on a CPU-only laptop; heavyweight training,
+eval, and quantization paths gate on opt-in extra dep groups. See
+[`docs/actualization_status.md`](docs/actualization_status.md) for the
 per-module map and [`HANDOFF.md`](HANDOFF.md) for the operator checklist.
 
-## Hackathon
+## Where this runs
 
-AMD × lablab.ai Developer Hackathon, build window May 4–10 2026, on-site
-finale May 9–10 in San Francisco.
+- **Operator + Coach UI:** [https://mindx.pythai.net/coach](https://mindx.pythai.net/coach)
+- **Public training-jobs API:** `https://mindx.pythai.net/v1/training/jobs`
+  (bearer auth via `MINDXTRAIN_API_KEY`)
+- **mindX self-training loop:** mindX's dream cycle writes JSONL training
+  data; this framework consumes it via the `mindx_dreams` data source and
+  fine-tunes a small fallback model on a single MI300X.
 
-- **Demo URL:** _TBD — `mindx.pythai.net/hackathon`_
-- **Video (5 min, ≤300 MB):** _TBD_
-- **Tracks:** AI Agents & Agentic Workflows, Fine-Tuning on AMD GPUs, Vision & Multimodal AI
-
-See [`HACKATHON.md`](HACKATHON.md) for daily verification gates and
-[`docs/NAV.md`](docs/NAV.md) for the full documentation hub.
+The AMD × lablab.ai hackathon (May 4–10 2026) historical notes live in
+[`HACKATHON.md`](HACKATHON.md); [`docs/NAV.md`](docs/NAV.md) is the full
+documentation hub.
 
 ## Quickstart
 

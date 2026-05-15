@@ -31,14 +31,16 @@ def test_coach_static_files_served():
     assert "loadRecipes" in r_js.text
 
 
-def test_recipes_list_returns_all_twelve():
+def test_recipes_list_includes_known_recipes():
     r = client.get("/coach/api/recipes")
     assert r.status_code == 200
     items = r.json()
-    assert len(items) == 12
+    assert len(items) >= 12
     names = {item["name"] for item in items}
     assert "qwen3_8b_sft_lora" in names
     assert "instella_3b_lora" in names
+    assert "mindx_fallback_qwen3_1_5b_sft_lora" in names
+    assert "mindx_fallback_qwen3_1_5b_cpu" in names
     for item in items:
         assert "base_model" in item
         assert "method" in item
@@ -110,7 +112,7 @@ def test_health_endpoint_reports_recipes_count():
     r = client.get("/coach/api/health")
     assert r.status_code == 200
     data = r.json()
-    assert data["recipes_available"] == 12
+    assert data["recipes_available"] >= 12
     assert data["chat_backend_ready"] is False
 
 
