@@ -191,6 +191,41 @@ def build_tail_cloud_init(cfg: DropletConfig) -> list[str]:
     return ["ssh", "-i", cfg.ssh_key, *_SSH_OPTS, f"{cfg.user}@{cfg.host}", remote]
 
 
+def build_tail_training_log(cfg: DropletConfig) -> list[str]:
+    """Tail the droplet's `mindxtrain train` combined log until done sentinel.
+
+    Streams every stdout line from the in-progress training run; exits with
+    the captured training exit code once `.train-done` appears. Used by the
+    orchestrator's post-bootstrap step to bridge remote training events into
+    the operator's run registry (where Coach's SSE picks them up).
+
+    The training command tees its output to a stable path
+    (`out/runs/_combined_train.log`) so we don't have to guess the per-recipe
+    run_name from the operator side.
+    """
+    from mindxtrain.deploy.cloud_init import (
+        TRAIN_DONE_SENTINEL,
+        TRAIN_EXIT_SENTINEL,
+    )
+
+    combined_log = f"{cfg.remote_path}/out/runs/_combined_train.log"
+    remote = (
+        # Make sure the log exists so tail -F doesn't error before training
+        # writes its first line.
+        f"mkdir -p {cfg.remote_path}/out/runs; "
+        f"touch {combined_log}; "
+        f"tail -n +1 -F {combined_log} & TAIL_PID=$!; "
+        # Block until training is terminal.
+        f"while [ ! -f {TRAIN_DONE_SENTINEL} ]; do sleep 5; done; "
+        # Give tail one more pass to flush.
+        f"sleep 2; kill $TAIL_PID 2>/dev/null; "
+        # Propagate the training exit code so the orchestrator can decide
+        # succeeded vs failed. Defaults to 1 if the sentinel is missing.
+        f"exit $(cat {TRAIN_EXIT_SENTINEL} 2>/dev/null || echo 1)"
+    )
+    return ["ssh", "-i", cfg.ssh_key, *_SSH_OPTS, f"{cfg.user}@{cfg.host}", remote]
+
+
 # ---- pipeline assembly ---------------------------------------------------
 
 def sync_steps(

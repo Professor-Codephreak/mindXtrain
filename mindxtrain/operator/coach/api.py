@@ -534,6 +534,15 @@ class DropletProvisionRequest(BaseModel):
     container: str | None = None
     extras: str = "ml,eval,data,obs"
     wait_for_bootstrap: bool = True
+    recipe: str | None = Field(
+        default=None,
+        description=(
+            "Built-in recipe to run on the droplet via `mindxtrain train` "
+            "after cloud-init bench. When set, the operator SSH-tails the "
+            "training log and bridges per-step events into this run's SSE "
+            "stream so the Coach Train card populates live."
+        ),
+    )
 
 
 # Spawn shims — same _SPAWN injection pattern used by training. Tests
@@ -586,6 +595,7 @@ def _real_droplet_provision_spawn(run: _runs.Run, req: DropletProvisionRequest) 
         run_id=run.id,
         out_dir=run.out_dir,
         wait_for_bootstrap=req.wait_for_bootstrap,
+        recipe=req.recipe,
         registry=_REGISTRY,
     )
 
@@ -717,6 +727,11 @@ async def api_droplet_provision(req: DropletProvisionRequest) -> _runs.Run:
             "error": "AMD Dev Cloud provision not configured",
             "missing": missing,
         })
+    if req.recipe is not None and req.recipe not in list_recipes():
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown recipe {req.recipe!r}",
+        )
     run = _bootstrap_run(_DROPLET_PROVISION_RECIPE)
     try:
         _DROPLET_PROVISION_SPAWN(run, req)

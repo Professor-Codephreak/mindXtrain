@@ -577,7 +577,7 @@ async function refreshDropletStatus() {
   }
 }
 
-async function runDeploy({ url, body, slot, runBtn, cancelBtn, logEl, badgeEl, onSuccess }) {
+async function runDeploy({ url, body, slot, runBtn, cancelBtn, logEl, badgeEl, onSuccess, onStart }) {
   runBtn.disabled = true;
   cancelBtn.hidden = false;
   try {
@@ -608,6 +608,12 @@ async function runDeploy({ url, body, slot, runBtn, cancelBtn, logEl, badgeEl, o
         }
       },
     });
+    // onStart fires after the run-id is known. Used by provision-with-recipe
+    // to bind the Train card's SSE to the same run before training begins
+    // streaming events, so the loss chart populates in real time.
+    if (typeof onStart === "function") {
+      try { onStart(); } catch (_) { /* non-fatal */ }
+    }
   } catch (e) {
     badgeEl.textContent = "failed";
     badgeEl.className = "badge-status failed";
@@ -649,27 +655,40 @@ function runGithubPush() {
 }
 
 function runDropletProvision() {
+  // Pass the picked recipe through so cloud-init runs `mindxtrain train`
+  // and the orchestrator bridges its log into this run's SSE stream. If
+  // the user somehow reaches Provision without picking a recipe, we still
+  // provision (bench-only) — the API treats recipe as optional.
+  const body = state.recipe ? { recipe: state.recipe } : {};
   return runDeploy({
     url: "/coach/api/droplet/provision",
-    body: {},
+    body,
     slot: "provision",
     runBtn: $("#run-provision"),
     cancelBtn: $("#cancel-provision"),
     logEl: $("#provision-log"),
     badgeEl: $("#provision-badge"),
-    onSuccess: () => {
-      // Cloud-init runs `mindxtrain bench` + `train` on the droplet —
-      // training has begun. Move user to the live Train card.
+    onStart: () => {
+      // The provision run-id is also where training events will land, so
+      // open the Train card immediately and bind its SSE to this run. The
+      // loss chart will populate as soon as the droplet starts training.
+      const runId = deploy.provision.runId;
+      if (!runId) return;
       markCardDone("step-deploy");
       progressTo("step-train");
+      $("#train-id").textContent = `run ${runId} (remote MI300X)`;
+      $("#train-charts").hidden = false;
+      $("#train-log-wrap").hidden = false;
+      subscribeRun(runId);
     },
   });
 }
 
 function runDropletSync() {
+  const body = state.recipe ? { recipe: state.recipe } : {};
   return runDeploy({
     url: "/coach/api/droplet/sync",
-    body: {},
+    body,
     slot: "sync",
     runBtn: $("#run-sync"),
     cancelBtn: $("#cancel-sync"),

@@ -42,6 +42,7 @@ from mindxtrain.deploy.droplet import (
     build_scp_plan_back,
     build_ssh_probe,
     build_tail_cloud_init,
+    build_tail_training_log,
     sync_steps,
 )
 from mindxtrain.deploy.github_push import (
@@ -56,6 +57,7 @@ from mindxtrain.operator.runs import (
     RunRegistry,
     StatusEvent,
     default_registry,
+    parse_trainer_log_line,
 )
 
 # ---- run_pipeline --------------------------------------------------------
@@ -77,8 +79,15 @@ def _stream_step(
     run_id: str,
     log_file: object,
     capture: list[str],
+    parse_trainer: bool = False,
 ) -> int:
-    """Run a single step's subprocess, tee stdout to log_file + LogEvents.
+    """Run a single step's subprocess, tee stdout to log_file + events.
+
+    By default each line becomes a `LogEvent`. With `parse_trainer=True`,
+    lines that match the HF Trainer JSON format are upgraded to `StepEvent`
+    (drives Coach's loss chart and metrics table); non-matching lines still
+    become `LogEvent`s. This is how remote training output bridges into the
+    same SSE channel the in-process trainer would publish to.
 
     Captures stdout into `capture` if `step.capture_stdout`. Returns the rc.
     """
@@ -92,12 +101,21 @@ def _stream_step(
     )
     registry.attach_process(run_id, proc)
     assert proc.stdout is not None
+    step_ctr = 0
     for raw in proc.stdout:
         line = raw.rstrip("\n")
         log_file.write(raw)  # type: ignore[attr-defined]
         log_file.flush()  # type: ignore[attr-defined]
         if step.capture_stdout:
             capture.append(line)
+        if parse_trainer:
+            step_ev = parse_trainer_log_line(line, fallback_step=step_ctr + 1)
+            if step_ev is not None:
+                step_ctr = step_ev.step
+                registry.publish_threadsafe(
+                    run_id, step_ev.model_copy(update={"run_id": run_id}),
+                )
+                continue
         _publish_log(registry, run_id, line)
     return proc.wait()
 
@@ -254,15 +272,29 @@ def droplet_provision_pipeline(
     run_id: str,
     out_dir: Path,
     wait_for_bootstrap: bool = True,
+    recipe: str | None = None,
     registry: RunRegistry | None = None,
     client_factory: Callable[[AmdDevCloudConfig], AmdDevCloudClient] | None = None,
     on_done: Callable[[int, dict[str, str]], None] | None = None,
 ) -> threading.Thread:
-    """Create a droplet, wait for bootstrap, scp plan.json back."""
+    """Create a droplet, wait for bootstrap, scp plan.json back, optionally
+    train + bridge training events into the run's SSE stream.
+
+    When `recipe` is set, cloud-init also runs `mindxtrain train` after
+    bench, and the orchestrator adds a fifth step that SSH-tails the
+    training log so Coach's loss chart populates live from the droplet.
+    Without `recipe`, behaviour is exactly as before (bench only).
+    """
     reg = registry if registry is not None else default_registry()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    user_data = render(repo=repo, branch=branch, container=container, extras=extras)
+    user_data = render(
+        repo=repo,
+        branch=branch,
+        container=container,
+        extras=extras,
+        recipe=recipe,
+    )
     factory = client_factory or AmdDevCloudClient
 
     def _log(line: str) -> None:
@@ -330,6 +362,7 @@ def droplet_provision_pipeline(
                 cmd=build_scp_plan_back(droplet_cfg, out_dir / "plan.remote.json"),
                 allow_failure=True,
             )
+            total_steps = 5 if recipe else 4
             log_file = _open_log_file(out_dir / "pipeline.log")
             try:
                 _publish_log(reg, run_id, f"  (waiting for {BOOTSTRAP_SENTINEL})")
@@ -337,8 +370,33 @@ def droplet_provision_pipeline(
                 if rc != 0:
                     final_rc = rc
                     return
-                _publish_log(reg, run_id, "=== step 4/4: scp plan.json back ===")
+                _publish_log(reg, run_id, f"=== step 4/{total_steps}: scp plan.json back ===")
                 _stream_step(step=scp_step, registry=reg, run_id=run_id, log_file=log_file, capture=[])
+
+                if recipe:
+                    _publish_log(
+                        reg, run_id,
+                        f"=== step 5/{total_steps}: bridge training log "
+                        f"for recipe={recipe} ===",
+                    )
+                    train_tail = Step(
+                        label="train-tail",
+                        cmd=build_tail_training_log(droplet_cfg),
+                    )
+                    train_rc = _stream_step(
+                        step=train_tail,
+                        registry=reg,
+                        run_id=run_id,
+                        log_file=log_file,
+                        capture=[],
+                        parse_trainer=True,
+                    )
+                    if train_rc != 0:
+                        _publish_log(
+                            reg, run_id,
+                            f"  (remote train exit rc={train_rc})",
+                        )
+                        final_rc = train_rc
             finally:
                 with contextlib.suppress(Exception):
                     log_file.close()  # type: ignore[attr-defined]
