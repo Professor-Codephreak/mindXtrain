@@ -20,9 +20,15 @@ app = typer.Typer(
 dataset_app = typer.Typer(name="dataset", help="Dataset preparation subcommands.", no_args_is_help=True)
 github_app = typer.Typer(name="github", help="GitHub source-tree publishing.", no_args_is_help=True)
 droplet_app = typer.Typer(name="droplet", help="AMD Dev Cloud MI300X provision + sync.", no_args_is_help=True)
+mei_app = typer.Typer(
+    name="mei",
+    help="mindX Efficiency Index — score, history, promotion checks.",
+    no_args_is_help=True,
+)
 app.add_typer(dataset_app)
 app.add_typer(github_app)
 app.add_typer(droplet_app)
+app.add_typer(mei_app)
 console = Console()
 
 
@@ -435,6 +441,100 @@ def droplet_sync_cmd(
             console.print(f"[red]{step.label} failed (rc={proc.returncode})[/red]")
             raise typer.Exit(code=3)
     console.print("[green]sync complete[/green]")
+
+
+# ---- mei verbs --------------------------------------------------------------
+
+
+@mei_app.command("score")
+def mei_score(
+    record: Path = typer.Argument(
+        ..., help="Path to a JSON MEIRecord file (output of the measurement orchestrator).",
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Optional path to write the MEIScore JSON. Defaults to stdout.",
+    ),
+    append_history: bool = typer.Option(
+        True, "--history/--no-history",
+        help="Append the score to the historical-comparison ledger.",
+    ),
+) -> None:
+    """Score a MEIRecord against the v0.1 anchors. Prints MEIScore JSON.
+
+    The record JSON must conform to `mindxtrain.eval.mei.record.MEIRecord`.
+    Generate one via the measurement orchestrator (Phase 1.4) or hand-craft
+    against the schema for demos.
+    """
+
+    from mindxtrain.eval.mei.history import append as _hist_append
+    from mindxtrain.eval.mei.record import MEIRecord
+    from mindxtrain.eval.mei.score import score_record
+
+    rec = MEIRecord.model_validate_json(record.read_text())
+    sc = score_record(rec)
+    out_text = sc.model_dump_json(indent=2)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(out_text + "\n")
+        console.print(f"[green]wrote[/green] {out}")
+    else:
+        console.print(out_text)
+
+    if append_history:
+        path = _hist_append(
+            sc,
+            run_id=rec.model_id,
+            model_id=rec.model_id,
+            model_sha256=rec.model_sha256,
+            promoted=False,
+        )
+        console.print(f"[dim]history appended → {path}[/dim]")
+
+    # Composite headline for terminal-friendly reading.
+    console.print(
+        f"[bold]MEI[/bold] = [bold cyan]{sc.composite:.3f}[/bold cyan]  "
+        f"Q={sc.quality:.3f} Dt={sc.decode_throughput:.3f} "
+        f"Pp={sc.prefill_throughput:.3f} M={sc.memory:.3f} E={sc.energy:.3f}"
+        + ("  [yellow](provisional Agentic)[/yellow]" if sc.mab_provisional else ""),
+    )
+    # Promotion preview (against the current ledger).
+    from mindxtrain.eval.mei.history import currently_promoted
+    from mindxtrain.eval.mei.score import is_promotable
+    prior = currently_promoted()
+    prior_score = prior.score if prior is not None else None
+    ok, reasons = is_promotable(sc, prior_promoted=prior_score)
+    if ok:
+        console.print("[green]✓ promotable[/green] — eligible for AgenticPlace.")
+    else:
+        console.print("[yellow]✗ not promotable[/yellow]:")
+        for r in reasons:
+            console.print(f"  • {r}")
+
+
+@mei_app.command("history")
+def mei_history(
+    last: int = typer.Option(10, "--last", "-n", help="Show the last N entries."),
+    promoted_only: bool = typer.Option(
+        False, "--promoted-only", help="Filter to entries promoted to AgenticPlace.",
+    ),
+) -> None:
+    """List recent MEI scores from the historical ledger."""
+    from mindxtrain.eval.mei.history import read_all
+
+    rows = read_all()
+    if promoted_only:
+        rows = [r for r in rows if r.promoted]
+    rows = rows[-last:] if last > 0 else rows
+    if not rows:
+        console.print("[dim](no MEI history yet — run `mindxtrain mei score …`)[/dim]")
+        return
+    for r in rows:
+        mark = "[green]★[/green]" if r.promoted else "·"
+        flag = " [yellow](prov)[/yellow]" if r.score.mab_provisional else ""
+        console.print(
+            f"{mark} {r.timestamp}  {r.model_id}  "
+            f"MEI={r.score.composite:.3f}{flag}",
+        )
 
 
 if __name__ == "__main__":
