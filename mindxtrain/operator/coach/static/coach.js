@@ -14,6 +14,8 @@ const state = {
   logLines: 0,         // capped at MAX_LOG_LINES client-side
   preflightReady: false,
   corpusReady: false,
+  mei: null,           // most recent MEIScoreView from /coach/api/mei/score
+  meiChart: null,      // Chart.js radar instance for the MEI sub-indices
 };
 
 const MAX_LOG_LINES = 2000;
@@ -41,6 +43,7 @@ const STAGE_FOR_STEP = {
   "step-compile":      "mind",
   "step-deploy":       "mind",
   "step-train":        "mind",
+  "step-mei":          "cust",
   "step-cost":         "cust",
   "step-chat":         "cust",
 };
@@ -384,8 +387,9 @@ function subscribeRun(runId) {
       $("#run-train").disabled = false;
       if (ev.status === "succeeded") {
         markCardDone("step-train");
-        // Train succeeded — let the user reach for Cost / Chat next.
-        progressTo("step-cost");
+        // Train succeeded — MEI scoring is the gate before promotion.
+        progressTo("step-mei");
+        loadMEIForRun(state.run && state.run.id);
       }
     }
   });
@@ -752,6 +756,211 @@ async function sendChat() {
   }
 }
 
+// --- step 7: MEI card -----------------------------------------------------
+
+const MEI_AXIS_LABELS = ["Q", "Dt", "Pp", "M", "E"];
+const MEI_AXIS_FULL = [
+  "Quality", "Decode throughput", "Prefill throughput", "Memory", "Energy",
+];
+
+function _ensureMEIRadar(axes) {
+  if (state.meiChart || typeof Chart === "undefined") return state.meiChart;
+  const ctx = $("#mei-radar").getContext("2d");
+  state.meiChart = new Chart(ctx, {
+    type: "radar",
+    data: {
+      labels: MEI_AXIS_FULL,
+      datasets: [{
+        label: "MEI sub-indices",
+        data: axes,
+        borderColor: "#f7921e",
+        backgroundColor: "rgba(247, 146, 30, 0.18)",
+        borderWidth: 2,
+        pointBackgroundColor: "#f7921e",
+      }],
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      scales: {
+        r: {
+          min: 0,
+          max: 1,
+          ticks: { stepSize: 0.2, color: "#8b949e", backdropColor: "transparent" },
+          grid: { color: "#30363d" },
+          angleLines: { color: "#30363d" },
+          pointLabels: { color: "#e6edf3", font: { size: 11 } },
+        },
+      },
+      plugins: { legend: { display: false } },
+    },
+  });
+  return state.meiChart;
+}
+
+function _renderMEISubindices(view) {
+  const ul = $("#mei-subindex-list");
+  ul.innerHTML = "";
+  const fields = [
+    ["quality", view.quality],
+    ["decode_throughput", view.decode_throughput],
+    ["prefill_throughput", view.prefill_throughput],
+    ["memory", view.memory],
+    ["energy", view.energy],
+  ];
+  for (const [k, v] of fields) {
+    const li = document.createElement("li");
+    li.innerHTML = `<code>${k}</code>${v.toFixed(3)}`;
+    ul.appendChild(li);
+  }
+}
+
+function _renderMEIPromotion(view) {
+  const promoteBtn = $("#mei-promote");
+  const reasonsList = $("#mei-reasons");
+  promoteBtn.disabled = !view.promotable;
+  if (view.promotable) {
+    reasonsList.hidden = true;
+    reasonsList.innerHTML = "";
+  } else {
+    reasonsList.hidden = false;
+    reasonsList.innerHTML = "";
+    for (const r of view.promotion_reasons) {
+      const li = document.createElement("li");
+      li.textContent = r;
+      reasonsList.appendChild(li);
+    }
+  }
+}
+
+function _renderMEINotes(view) {
+  const ul = $("#mei-notes");
+  ul.innerHTML = "";
+  if (!view.notes || !view.notes.length) {
+    ul.hidden = true;
+    return;
+  }
+  ul.hidden = false;
+  for (const n of view.notes) {
+    const li = document.createElement("li");
+    li.textContent = n;
+    ul.appendChild(li);
+  }
+}
+
+async function loadMEIForRun(runId) {
+  const summary = $("#mei-summary");
+  const body = $("#mei-card-body");
+  if (!runId) {
+    summary.textContent = "no active run";
+    return;
+  }
+  summary.textContent = `loading score for run ${runId}…`;
+  try {
+    const view = await getJSON(`/coach/api/mei/score/${encodeURIComponent(runId)}`);
+    state.mei = view;
+    body.hidden = false;
+    $("#mei-composite").textContent = view.composite.toFixed(3);
+    $("#mei-provisional-flag").hidden = !view.mab_provisional;
+    summary.textContent = view.promotable
+      ? "promotable to AgenticPlace"
+      : "below promotion gate — see reasons";
+    const axes = [
+      view.quality, view.decode_throughput, view.prefill_throughput,
+      view.memory, view.energy,
+    ];
+    const chart = _ensureMEIRadar(axes);
+    if (chart) {
+      chart.data.datasets[0].data = axes;
+      chart.update("none");
+    }
+    _renderMEISubindices(view);
+    _renderMEINotes(view);
+    _renderMEIPromotion(view);
+    refreshMEIHistory();
+  } catch (e) {
+    summary.textContent = `no MEI score for ${runId} yet — score the run via \`mindxtrain mei score\``;
+    body.hidden = true;
+  }
+}
+
+async function refreshMEIHistory() {
+  const wrap = $("#mei-history-wrap");
+  const tbody = $("#mei-history-table tbody");
+  try {
+    const rows = await getJSON("/coach/api/mei/history?last=10");
+    tbody.innerHTML = "";
+    if (!rows.length) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const mark = r.promoted
+        ? '<span class="promoted-mark">★</span>'
+        : "·";
+      tr.innerHTML = `
+        <td>${new Date(r.timestamp).toLocaleString()}</td>
+        <td class="mono">${r.run_id}</td>
+        <td>${r.model_id}</td>
+        <td><strong>${r.composite.toFixed(3)}</strong></td>
+        <td>${mark}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    wrap.hidden = true;
+  }
+}
+
+async function promoteCurrentMEI() {
+  if (!state.mei) return;
+  const promoteBtn = $("#mei-promote");
+  const badge = $("#mei-promote-badge");
+  promoteBtn.disabled = true;
+  badge.hidden = false;
+  badge.textContent = "promoting…";
+  badge.className = "badge-status running";
+  try {
+    const r = await fetch(
+      `/coach/api/mei/promote/${encodeURIComponent(state.mei.run_id)}`,
+      { method: "POST" },
+    );
+    if (!r.ok) {
+      const text = await r.text();
+      badge.textContent = `failed (${r.status})`;
+      badge.className = "badge-status failed";
+      console.error("promote failed:", text);
+      promoteBtn.disabled = false;
+      return;
+    }
+    const body = await r.json();
+    if (body.promoted) {
+      badge.textContent = "promoted";
+      badge.className = "badge-status succeeded";
+      promoteBtn.disabled = true;  // already promoted; refresh below
+      refreshMEIHistory();
+    } else {
+      badge.textContent = "blocked";
+      badge.className = "badge-status failed";
+      const reasonsList = $("#mei-reasons");
+      reasonsList.hidden = false;
+      reasonsList.innerHTML = "";
+      for (const reason of body.reasons || []) {
+        const li = document.createElement("li");
+        li.textContent = reason;
+        reasonsList.appendChild(li);
+      }
+      promoteBtn.disabled = false;
+    }
+  } catch (e) {
+    badge.textContent = String(e);
+    badge.className = "badge-status failed";
+    promoteBtn.disabled = false;
+  }
+}
+
 // --- bootstrap -----------------------------------------------------------
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -762,6 +971,10 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#cancel-train").addEventListener("click", cancelTrain);
   $("#run-cost").addEventListener("click", runCost);
   $("#chat-send").addEventListener("click", sendChat);
+  $("#mei-refresh").addEventListener("click", () => {
+    loadMEIForRun(state.run && state.run.id);
+  });
+  $("#mei-promote").addEventListener("click", promoteCurrentMEI);
 
   // Deploy section.
   $("#run-github").addEventListener("click", runGithubPush);
@@ -780,5 +993,6 @@ window.addEventListener("DOMContentLoaded", () => {
   probeChat();
   refreshGithubStatus();
   refreshDropletStatus();
+  refreshMEIHistory();
   runPreflight();
 });

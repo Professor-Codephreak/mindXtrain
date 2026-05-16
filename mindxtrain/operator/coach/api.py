@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mindxtrain.autotune.benchmark import run_autotune
 from mindxtrain.autotune.plan import AutotunePlan
@@ -774,3 +774,165 @@ async def api_droplet_list(name: str | None = None) -> list[dict[str, Any]]:
     cfg = _adc.from_env()
     with _adc.AmdDevCloudClient(cfg) as client:
         return client.list(name=name)
+
+
+# ---- MEI (mindX Efficiency Index) endpoints -----------------------------
+# Surface the score layer for the Coach UI. The score itself is computed
+# in `mindxtrain.eval.mei.score`; this layer reads the history ledger and
+# exposes promotion gating to the operator.
+
+
+class MEIHistoryRow(BaseModel):
+    """Compact row for the Coach's history list. Maps a HistoryEntry to a
+    flat shape the JS renderer can consume without nested unwrapping."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: str
+    run_id: str
+    model_id: str
+    promoted: bool
+    composite: float
+    quality: float
+    decode_throughput: float
+    prefill_throughput: float
+    memory: float
+    energy: float
+    mab_provisional: bool
+
+
+class MEIScoreView(BaseModel):
+    """Full score plus promotion preview for one run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    model_id: str
+    composite: float
+    quality: float
+    decode_throughput: float
+    prefill_throughput: float
+    memory: float
+    energy: float
+    quality_bands: dict[str, float]
+    mab_provisional: bool
+    notes: list[str]
+    promotable: bool
+    promotion_reasons: list[str]
+
+
+class MEIPromoteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    promoted: bool
+    reasons: list[str] = Field(
+        default_factory=list,
+        description="When promoted=False, the failing-gate reasons.",
+    )
+
+
+def _history_row_from_entry(entry: Any) -> MEIHistoryRow:
+    s = entry.score
+    return MEIHistoryRow(
+        timestamp=entry.timestamp,
+        run_id=entry.run_id,
+        model_id=entry.model_id,
+        promoted=entry.promoted,
+        composite=s.composite,
+        quality=s.quality,
+        decode_throughput=s.decode_throughput,
+        prefill_throughput=s.prefill_throughput,
+        memory=s.memory,
+        energy=s.energy,
+        mab_provisional=s.mab_provisional,
+    )
+
+
+@router.get("/api/mei/history", response_model=list[MEIHistoryRow])
+async def api_mei_history(last: int = 20) -> list[MEIHistoryRow]:
+    """Return the last N MEI history entries, newest-first.
+
+    Empty list when no scores exist yet. The Coach UI renders this as the
+    "Recent MEI scores" mini-list under the MEI card.
+    """
+    from mindxtrain.eval.mei import history as _mei_history
+
+    rows = _mei_history.read_all()
+    if last > 0:
+        rows = rows[-last:]
+    return [_history_row_from_entry(e) for e in reversed(rows)]
+
+
+@router.get("/api/mei/score/{run_id:path}", response_model=MEIScoreView)
+async def api_mei_score(run_id: str) -> MEIScoreView:
+    """Return the most recent MEIScore for `run_id`, plus promotability.
+
+    The run-id is the registry id used by the training pipeline. Returns
+    404 when no score has been recorded for that run yet (the operator
+    can rerun `mindxtrain mei score` against the run's record to populate).
+    """
+    from mindxtrain.eval.mei import history as _mei_history
+    from mindxtrain.eval.mei.score import is_promotable
+
+    entries = [e for e in _mei_history.read_all() if e.run_id == run_id]
+    if not entries:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no MEI score recorded for run_id={run_id!r}",
+        )
+    # Most-recent (file-order last) wins when a run was scored multiple times.
+    entry = entries[-1]
+    prior = _mei_history.currently_promoted()
+    prior_score = prior.score if prior is not None and prior.run_id != run_id else None
+    ok, reasons = is_promotable(entry.score, prior_promoted=prior_score)
+    sc = entry.score
+    return MEIScoreView(
+        run_id=entry.run_id,
+        model_id=entry.model_id,
+        composite=sc.composite,
+        quality=sc.quality,
+        decode_throughput=sc.decode_throughput,
+        prefill_throughput=sc.prefill_throughput,
+        memory=sc.memory,
+        energy=sc.energy,
+        quality_bands=dict(sc.quality_bands),
+        mab_provisional=sc.mab_provisional,
+        notes=list(sc.notes),
+        promotable=ok,
+        promotion_reasons=reasons,
+    )
+
+
+@router.post("/api/mei/promote/{run_id:path}", response_model=MEIPromoteResponse)
+async def api_mei_promote(run_id: str) -> MEIPromoteResponse:
+    """Promote `run_id` to AgenticPlace if all §8 gates pass.
+
+    Idempotent in the sense that repeated promotion of the same run only
+    appends new history entries (each with promoted=True). The currently-
+    promoted entry is whatever the last `promoted=True` row says — append-
+    only ledger semantics.
+    """
+    from mindxtrain.eval.mei import history as _mei_history
+    from mindxtrain.eval.mei.score import is_promotable
+
+    entries = [e for e in _mei_history.read_all() if e.run_id == run_id]
+    if not entries:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no MEI score recorded for run_id={run_id!r}",
+        )
+    entry = entries[-1]
+    prior = _mei_history.currently_promoted()
+    prior_score = prior.score if prior is not None and prior.run_id != run_id else None
+    ok, reasons = is_promotable(entry.score, prior_promoted=prior_score)
+    if not ok:
+        return MEIPromoteResponse(run_id=run_id, promoted=False, reasons=reasons)
+    _mei_history.append(
+        entry.score,
+        run_id=entry.run_id,
+        model_id=entry.model_id,
+        model_sha256=entry.model_sha256,
+        promoted=True,
+    )
+    return MEIPromoteResponse(run_id=run_id, promoted=True, reasons=[])

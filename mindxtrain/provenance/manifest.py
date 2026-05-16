@@ -83,6 +83,13 @@ class Manifest(BaseModel):
 
     eval_summary: dict[str, float] = Field(default_factory=dict)
 
+    # MEI promotion-gate audit trail. When the publish step bypasses the
+    # gate via --force, the manifest records the bypass + the failing
+    # reasons so reviewers can see retroactively that promotion was not
+    # earned by the §8 thresholds.
+    promotion_bypassed: bool = False
+    promotion_bypass_reasons: list[str] = Field(default_factory=list)
+
 
 def emit_receipt(
     cfg: object,

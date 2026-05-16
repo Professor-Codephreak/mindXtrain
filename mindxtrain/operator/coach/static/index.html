@@ -134,9 +134,50 @@
       </details>
     </section>
 
+    <section id="step-mei" class="card" data-step-id="step-mei">
+      <header>
+        <h2><span class="step">7</span> mindX Efficiency Index</h2>
+        <span class="hint" id="mei-summary">waiting for a scored run&hellip;</span>
+      </header>
+      <p class="prose">
+        Composite score over five sub-indices &mdash; quality, decode
+        throughput, prefill throughput, memory footprint, and energy per
+        useful token &mdash; combined via weighted geometric mean
+        (spec &sect;5). A checkpoint must clear MEI &ge; 0.55 with every
+        sub-index &ge; 0.30 to be promotable to AgenticPlace.
+      </p>
+      <div id="mei-card-body" hidden>
+        <div class="mei-headline">
+          <span class="mei-composite-label">MEI</span>
+          <span class="mei-composite-value" id="mei-composite">0.000</span>
+          <span class="mei-flag" id="mei-provisional-flag" hidden>provisional Agentic</span>
+        </div>
+        <div class="mei-chart-wrap">
+          <canvas id="mei-radar" height="240"></canvas>
+        </div>
+        <ul id="mei-subindex-list" class="summary"></ul>
+        <ul id="mei-notes" class="hint" hidden></ul>
+        <div class="mei-controls">
+          <button id="mei-refresh">Refresh</button>
+          <button id="mei-promote" disabled>Promote to AgenticPlace</button>
+          <span id="mei-promote-badge" class="badge-status" hidden></span>
+        </div>
+        <ul id="mei-reasons" class="summary" hidden></ul>
+      </div>
+      <details id="mei-history-wrap" hidden>
+        <summary>Recent MEI history</summary>
+        <table id="mei-history-table">
+          <thead>
+            <tr><th>when</th><th>run</th><th>model</th><th>MEI</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </details>
+    </section>
+
     <section id="step-cost" class="card" data-step-id="step-cost">
       <header>
-        <h2><span class="step">7</span> Cost vs H100</h2>
+        <h2><span class="step">8</span> Cost vs H100</h2>
       </header>
       <div class="cost-controls">
         <label>GPUs <input id="cost-gpus" type="number" min="1" max="8" step="1" value="1" /></label>
@@ -154,7 +195,7 @@
 
     <section id="step-deploy" class="card" data-step-id="step-deploy">
       <header>
-        <h2><span class="step">8</span> Deploy</h2>
+        <h2><span class="step">9</span> Deploy</h2>
         <span class="hint">push to GitHub &middot; provision MI300X &middot; sync to existing droplet</span>
       </header>
       <p class="prose">
@@ -208,7 +249,7 @@
 
     <section id="step-chat" class="card" data-step-id="step-chat">
       <header>
-        <h2><span class="step">9</span> Try the model</h2>
+        <h2><span class="step">10</span> Try the model</h2>
         <span class="hint" id="chat-status">probing&hellip;</span>
       </header>
       <p class="prose" id="chat-disabled-msg">

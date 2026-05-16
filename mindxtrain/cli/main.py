@@ -234,9 +234,21 @@ def publish(
     manifest: Path = typer.Option(..., "--manifest", "-m", help="path to provenance manifest.json"),
     skip_hf: bool = typer.Option(False, "--skip-hf"),
     skip_pin: bool = typer.Option(False, "--skip-pin"),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Skip the MEI promotion gate. The manifest records promotion_bypassed=true.",
+    ),
 ) -> None:
-    """Push to HF Hub + Lighthouse + register the provenance manifest with the mindX API."""
+    """Push to HF Hub + Lighthouse + register the provenance manifest with the mindX API.
+
+    By default this verb consults the historical MEI ledger: if there's a
+    score for this run_id and it doesn't pass the §8 promotion gates, the
+    push is refused with the failing-gate reasons surfaced. `--force`
+    skips the gate (records `promotion_bypassed=true` in the manifest).
+    """
     from mindxtrain.deploy.api_client import register_with_mindx
+    from mindxtrain.eval.mei import history as _mei_history
+    from mindxtrain.eval.mei.score import is_promotable
     from mindxtrain.provenance.manifest import Manifest
     from mindxtrain.storage.hf_hub import publish_to_hf
     from mindxtrain.storage.lighthouse import publish_to_lighthouse
@@ -244,6 +256,47 @@ def publish(
     cfg = load_config(config)
     m = Manifest.model_validate_json(manifest.read_text())
     ckpt_dir = Path("./out/runs") / cfg.meta.run_name / "checkpoint"
+
+    # MEI promotion gate. Skip silently when there's no MEI score yet —
+    # the gate is informational, not mandatory at intake (so existing
+    # publish flows pre-MEI continue to work). With --force, we proceed
+    # regardless and stamp the manifest so the bypass is auditable.
+    mei_entries = [e for e in _mei_history.read_all() if e.run_id == m.run_id]
+    if mei_entries:
+        latest = mei_entries[-1]
+        prior = _mei_history.currently_promoted()
+        prior_score = (
+            prior.score if prior is not None and prior.run_id != m.run_id else None
+        )
+        ok, reasons = is_promotable(latest.score, prior_promoted=prior_score)
+        if ok:
+            console.print(
+                f"[green]MEI gate:[/green] {latest.score.composite:.3f} ≥ 0.55, "
+                "all sub-indices ≥ 0.30 — promotable.",
+            )
+        elif force:
+            console.print(
+                "[yellow]MEI gate failed but --force given; "
+                "marking promotion_bypassed=true in manifest:[/yellow]",
+            )
+            for reason in reasons:
+                console.print(f"  • {reason}")
+            m.promotion_bypassed = True
+            m.promotion_bypass_reasons = reasons
+        else:
+            console.print("[red]MEI gate refused promotion:[/red]")
+            for reason in reasons:
+                console.print(f"  • {reason}")
+            console.print(
+                "Pass --force to publish anyway (the bypass is recorded "
+                "in the manifest).",
+            )
+            raise typer.Exit(code=4)
+    elif force:
+        console.print(
+            "[yellow]No MEI score on file; --force given. "
+            "Recommend running `mindxtrain mei score <record.json>` first.[/yellow]",
+        )
 
     hf_url = ""
     if not skip_hf and ckpt_dir.exists():
