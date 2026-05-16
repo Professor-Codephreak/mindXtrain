@@ -388,11 +388,51 @@ SpawnFn = Callable[["_runs.Run", XTrainConfig, AutotunePlan], None]
 
 
 def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
-    """Default spawn: compile Axolotl YAML and stream the subprocess.
+    """Default spawn: route by backend.
+
+    - `trl_cpu` runs in-process on a daemon thread (uses the same code
+      path as `/v1/training/jobs` so the Coach UI sees the same events
+      whether the run was kicked off via Coach or the public API).
+    - Everything else compiles to Axolotl YAML + streams a subprocess.
 
     Tests monkey-patch the module-level `_SPAWN` to bypass the real
     subprocess and emit canned events instead.
     """
+    if cfg.train.backend == "trl_cpu":
+        import threading
+
+        from mindxtrain.train.backend_trl_cpu import run_trl_cpu
+
+        def _on_line(line: str) -> None:
+            _REGISTRY.publish_threadsafe(
+                run.id, _runs.LogEvent(run_id=run.id, line=line, level="stdout"),
+            )
+
+        def _thread() -> None:
+            _REGISTRY.publish_threadsafe(
+                run.id,
+                _runs.StatusEvent(run_id=run.id, status="running", message="cpu lane"),
+            )
+            try:
+                run_trl_cpu(cfg, plan, run.out_dir, on_line=_on_line)
+            except Exception as exc:  # noqa: BLE001
+                _REGISTRY.publish_threadsafe(
+                    run.id,
+                    _runs.StatusEvent(run_id=run.id, status="failed", message=str(exc)),
+                )
+                _REGISTRY.close_subscribers(run.id)
+                return
+            _REGISTRY.publish_threadsafe(
+                run.id,
+                _runs.StatusEvent(
+                    run_id=run.id, status="succeeded", message="cpu lane done",
+                ),
+            )
+            _REGISTRY.close_subscribers(run.id)
+
+        threading.Thread(target=_thread, daemon=True, name=f"trl-cpu-{run.id}").start()
+        return
+
     from mindxtrain.train.sft import prepare_run
 
     prepared = prepare_run(cfg, plan, run.out_dir)
