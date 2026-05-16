@@ -237,21 +237,14 @@ async def api_health() -> CoachHealthResponse:
     name so the UI can render "ollama (qwen3:0.6b) ready".
     """
     from mindxtrain.operator.app import (
-        _ollama_reachable,
-        ollama_first_model,
+        backend_first_model,
+        backend_reachable,
         resolve_backend_name,
     )
 
     backend = resolve_backend_name()
-    model_name = ""
-    ready = False
-    if backend == "ollama":
-        ready = _ollama_reachable()
-        if ready:
-            model_name = ollama_first_model() or ""
-    # vllm / openai_compat readiness probe is left as the existing chat-
-    # completions failure path for now — the laptop dev case (ollama) is
-    # what flips the UI's chat card from "(no backend configured)" to live.
+    ready = backend_reachable(backend)
+    model_name = (backend_first_model(backend) or "") if ready else ""
     return CoachHealthResponse(
         chat_backend_ready=ready,
         chat_backend_name=backend,

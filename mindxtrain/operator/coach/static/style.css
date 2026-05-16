@@ -179,6 +179,41 @@ textarea { width: 100%; resize: vertical; }
   border-color: var(--accent);
   background: rgba(247, 146, 30, 0.05);
 }
+.backend-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  vertical-align: middle;
+  margin-left: 0.6rem;
+  border: 1px solid var(--border);
+}
+.backend-badge::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem; height: 0.5rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.backend-badge.ready {
+  color: var(--ok);
+  border-color: rgba(46, 160, 67, 0.4);
+  background: rgba(46, 160, 67, 0.08);
+}
+.backend-badge.ready::before { background: var(--ok); }
+.backend-badge.notready {
+  color: var(--muted);
+  border-color: var(--border);
+  background: rgba(139, 148, 158, 0.08);
+}
+.backend-badge.notready::before { background: var(--warn); }
+
 .recipe.recommended {
   border-color: var(--accent-2);
   box-shadow: 0 0 0 2px rgba(247, 146, 30, 0.25), 0 0 12px rgba(247, 146, 30, 0.15);

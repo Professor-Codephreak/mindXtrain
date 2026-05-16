@@ -815,6 +815,13 @@ async function pushTrainedRunToOllama() {
   btn.disabled = true;
   status.textContent = "merging + creating…";
   status.className = "hint";
+  // Push log lines stream into the train-log SSE channel — surface them
+  // so the user isn't watching a frozen button for ~30-60s of merge time.
+  const logWrap = $("#train-log-wrap");
+  if (logWrap) {
+    logWrap.hidden = false;
+    logWrap.open = true;
+  }
   try {
     // The log lines fire through the train SSE channel — the user is
     // already watching #train-log, so the merge progress shows up there.
@@ -1130,10 +1137,37 @@ async function probeChat() {
       const name = h.chat_backend_name || "(no backend configured)";
       status.textContent = `${name} not ready`;
       status.className = "hint notready";
+      // Keep the input visible but disabled, with a hint about why.
+      $("#chat-disabled-msg").hidden = false;
     }
+    _updateBackendBadge(h);
   } catch (e) {
     $("#chat-status").textContent = "health probe failed";
+    _updateBackendBadge({ chat_backend_ready: false, chat_backend_name: "" });
   }
+}
+
+function _updateBackendBadge(h) {
+  const badge = $("#backend-badge");
+  if (!badge) return;
+  if (h && h.chat_backend_ready) {
+    const tail = h.chat_backend_model ? ` (${h.chat_backend_model})` : "";
+    badge.textContent = `${h.chat_backend_name}${tail} live`;
+    badge.className = "backend-badge ready";
+  } else {
+    const name = (h && h.chat_backend_name) || "no backend";
+    badge.textContent = `${name} cold`;
+    badge.className = "backend-badge notready";
+  }
+}
+
+function _startChatBackendPolling() {
+  // Re-probe every 30s so the chat card flips live if the user starts
+  // ollama or vLLM after page-load. Also re-probe on tab focus — the
+  // user often switches to a terminal, starts the daemon, then flips
+  // back expecting the UI to know.
+  setInterval(() => { probeChat(); }, 30000);
+  window.addEventListener("focus", () => { probeChat(); });
 }
 
 async function sendChat() {
@@ -1415,6 +1449,7 @@ window.addEventListener("DOMContentLoaded", () => {
   syncPipelineHeader("step-preflight");
   loadRecipes();
   probeChat();
+  _startChatBackendPolling();
   refreshGithubStatus();
   refreshDropletStatus();
   refreshMEIHistory();
