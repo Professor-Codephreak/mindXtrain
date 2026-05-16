@@ -741,6 +741,11 @@ function subscribeRun(runId) {
       $("#run-train").disabled = false;
       if (ev.status === "succeeded") {
         markCardDone("step-train");
+        // Reveal the push-to-ollama button — adapter is on disk and the
+        // run registry knows about it. The user can pick a tag and merge
+        // before (or in parallel with) MEI scoring.
+        const pushWrap = $("#push-to-ollama-wrap");
+        if (pushWrap) pushWrap.hidden = false;
         // Train succeeded — MEI scoring is the gate before promotion.
         progressTo("step-mei");
         loadMEIForRun(state.run && state.run.id);
@@ -799,6 +804,45 @@ async function cancelTrain() {
     await fetch(`/coach/api/runs/${state.run.id}/cancel`, { method: "POST" });
   } finally {
     $("#cancel-train").disabled = false;
+  }
+}
+
+async function pushTrainedRunToOllama() {
+  if (!state.run) return;
+  const btn = $("#push-to-ollama-btn");
+  const status = $("#push-to-ollama-status");
+  const tag = ($("#ollama-push-tag").value || "").trim();
+  btn.disabled = true;
+  status.textContent = "merging + creating…";
+  status.className = "hint";
+  try {
+    // The log lines fire through the train SSE channel — the user is
+    // already watching #train-log, so the merge progress shows up there.
+    const body = tag ? { tag } : {};
+    const r = await fetch(
+      `/coach/api/runs/${encodeURIComponent(state.run.id)}/push-to-ollama`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      status.textContent = `failed (${r.status}): ${data.detail || "unknown error"}`;
+      status.className = "hint bad";
+      return;
+    }
+    status.textContent = `pushed: ${data.tag} (${data.merged_dir})`;
+    status.className = "hint ready";
+    // Re-probe so the chat card flips to the freshly pushed model on its
+    // next status read.
+    probeChat();
+  } catch (e) {
+    status.textContent = `error: ${e}`;
+    status.className = "hint bad";
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -1347,6 +1391,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#run-compile").addEventListener("click", runCompile);
   $("#run-train").addEventListener("click", runTrain);
   $("#cancel-train").addEventListener("click", cancelTrain);
+  const pushBtn = $("#push-to-ollama-btn");
+  if (pushBtn) pushBtn.addEventListener("click", pushTrainedRunToOllama);
   $("#run-cost").addEventListener("click", runCost);
   $("#chat-send").addEventListener("click", sendChat);
   $("#mei-refresh").addEventListener("click", () => {

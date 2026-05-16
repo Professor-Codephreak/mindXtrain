@@ -179,6 +179,24 @@
         <summary>train.log (live tail)</summary>
         <pre id="train-log" class="code log-tail"></pre>
       </details>
+      <div id="push-to-ollama-wrap" hidden>
+        <hr>
+        <h3 class="prose-h3">Push to local ollama</h3>
+        <p class="prose">
+          Merge the LoRA adapter into the base weights and call
+          <code>ollama create</code>. The new tag is immediately servable
+          on <code>localhost:11434</code> &mdash; the same backend Coach
+          probes for its chat card, so the new model becomes the default
+          completer for <code>/v1/chat/completions</code> on the next
+          probe.
+        </p>
+        <div class="train-controls">
+          <label>tag <input id="ollama-push-tag" type="text"
+            placeholder="(defaults to recipe name)" style="width:18rem"></label>
+          <button id="push-to-ollama-btn">Push to ollama</button>
+          <span id="push-to-ollama-status" class="hint"></span>
+        </div>
+      </div>
     </section>
 
     <section id="step-mei" class="card" data-step-id="step-mei">

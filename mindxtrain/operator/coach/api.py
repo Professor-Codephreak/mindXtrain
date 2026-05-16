@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -591,6 +592,126 @@ async def api_run_cancel(run_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
     cancelled = await _REGISTRY.cancel(run_id, grace_s=2.0)
     return {"run_id": run_id, "cancelled": cancelled}
+
+
+class PushToOllamaRequest(BaseModel):
+    tag: str | None = Field(
+        default=None,
+        description="Ollama tag for the new model. Defaults to the run's recipe name.",
+    )
+    system_prompt: str | None = None
+    base_model: str | None = Field(
+        default=None,
+        description=(
+            "Override the base model name resolved from the recipe. Useful "
+            "when the training adapter was produced against a snapshot that "
+            "differs from the recipe's `model.name` field."
+        ),
+    )
+
+
+class PushToOllamaResponse(BaseModel):
+    run_id: str
+    tag: str
+    merged_dir: str
+    modelfile: str
+    message: str = "pushed"
+
+
+@router.post(
+    "/api/runs/{run_id:path}/push-to-ollama",
+    response_model=PushToOllamaResponse,
+)
+async def api_run_push_to_ollama(
+    run_id: str, req: PushToOllamaRequest,
+) -> PushToOllamaResponse:
+    """Merge the run's LoRA adapter into the base weights, write a
+    Modelfile, and call `ollama create`. Streams the push log into the
+    run's SSE channel so the Coach UI can replay it in the train card.
+
+    The adapter is expected at `<run.out_dir>/checkpoint/` — the same
+    location both trl_cpu and the axolotl subprocess write to.
+    """
+    snap = _REGISTRY.get(run_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
+
+    adapter = snap.out_dir / "checkpoint"
+    if not adapter.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"no checkpoint at {adapter}; let the training run finish "
+                f"before pushing to ollama"
+            ),
+        )
+
+    # Resolve the base model from the recipe unless the caller overrode it.
+    if req.base_model:
+        base_model = req.base_model
+    else:
+        try:
+            cfg = XTrainConfig.model_validate(
+                yaml.safe_load(render_recipe(snap.recipe)),
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"can't resolve base model from recipe {snap.recipe!r}: {exc}",
+            ) from exc
+        base_model = cfg.model.name
+
+    tag = req.tag or snap.recipe
+
+    def _log(line: str) -> None:
+        _REGISTRY.publish_threadsafe(
+            run_id, _runs.LogEvent(run_id=run_id, line=line, level="stdout"),
+        )
+
+    _REGISTRY.publish(
+        run_id,
+        _runs.StatusEvent(
+            run_id=run_id, status="running",
+            message=f"push-to-ollama: {base_model} + {adapter} -> {tag}",
+        ),
+    )
+
+    try:
+        from mindxtrain.deploy.ollama_push import push_to_ollama
+        result = await asyncio.to_thread(
+            push_to_ollama,
+            base_model=base_model,
+            adapter_dir=adapter,
+            tag=tag,
+            system_prompt=req.system_prompt,
+            sink=_log,
+        )
+    except (FileNotFoundError, ImportError) as exc:
+        _REGISTRY.publish(
+            run_id,
+            _runs.StatusEvent(run_id=run_id, status="failed", message=str(exc)),
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except subprocess.CalledProcessError as exc:
+        msg = (exc.stderr or exc.stdout or "").strip() or f"ollama create exit={exc.returncode}"
+        _REGISTRY.publish(
+            run_id,
+            _runs.StatusEvent(run_id=run_id, status="failed", message=msg),
+        )
+        raise HTTPException(status_code=502, detail=msg) from exc
+
+    _REGISTRY.publish(
+        run_id,
+        _runs.StatusEvent(
+            run_id=run_id, status="succeeded", message=f"pushed to ollama as {result.tag}",
+        ),
+    )
+    return PushToOllamaResponse(
+        run_id=run_id,
+        tag=result.tag,
+        merged_dir=str(result.merged_dir),
+        modelfile=str(result.modelfile),
+    )
 
 
 @router.post("/api/runs/{run_id}/ingest")

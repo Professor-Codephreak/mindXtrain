@@ -216,11 +216,66 @@ def quantize(
 def serve(
     config: Path = typer.Argument(...),
     checkpoint: Path = typer.Option(None, "--checkpoint", "-c"),
+    to: str = typer.Option(
+        "vllm", "--to",
+        help="Serve target: vllm (default, builds vllm-rocm launch cmd) or "
+             "ollama (merges LoRA + calls `ollama create`).",
+    ),
+    tag: str = typer.Option(
+        None, "--tag",
+        help="Ollama tag for `--to ollama`. Defaults to run_name when omitted.",
+    ),
+    ollama_bin: str = typer.Option(
+        None, "--ollama-bin",
+        help="Override the ollama binary path (defaults to PATH lookup).",
+    ),
 ) -> None:
-    """Boot vLLM-ROCm against the quantized checkpoint."""
+    """Serve the trained checkpoint locally.
+
+    `--to vllm` (default) prints a vllm-rocm launch command against the
+    quantized checkpoint — wire it into your orchestrator.
+
+    `--to ollama` runs the local-learning loop: merges the LoRA adapter
+    into the base weights, writes an ollama Modelfile, and calls
+    `ollama create <tag>` so the trained model is immediately available
+    on the loopback (the same backend Coach probes for its chat card).
+    """
+    cfg = load_config(config)
+
+    if to == "ollama":
+        from mindxtrain.deploy.ollama_push import push_to_ollama
+
+        # The LoRA adapter is at <run_dir>/checkpoint/ — same location
+        # the trl_cpu / axolotl backends save to.
+        adapter_dir = checkpoint or Path("./out/runs") / cfg.meta.run_name / "checkpoint"
+        if not adapter_dir.exists():
+            console.print(f"[red]checkpoint not found:[/red] {adapter_dir}")
+            raise typer.Exit(code=1)
+
+        resolved_tag = tag or cfg.meta.run_name
+        try:
+            result = push_to_ollama(
+                base_model=cfg.model.name,
+                adapter_dir=adapter_dir,
+                tag=resolved_tag,
+                sink=lambda line: console.print(line),
+                ollama_bin=ollama_bin,
+            )
+        except (FileNotFoundError, ImportError) as exc:
+            console.print(f"[red]push-to-ollama failed:[/red] {exc}")
+            raise typer.Exit(code=2) from exc
+        console.print(
+            f"[green]pushed:[/green] {result.tag} "
+            f"(merged: {result.merged_dir}, Modelfile: {result.modelfile})",
+        )
+        return
+
+    if to != "vllm":
+        console.print(f"[red]unknown serve target:[/red] {to}")
+        raise typer.Exit(code=2)
+
     from mindxtrain.deploy.vllm_launcher import build_vllm_command
 
-    cfg = load_config(config)
     ckpt = checkpoint or Path("./out/runs") / cfg.meta.run_name / "quantized"
     if not ckpt.exists():
         console.print(f"[red]quantized checkpoint not found:[/red] {ckpt}")
