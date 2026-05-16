@@ -415,7 +415,7 @@ def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
             )
             try:
                 run_trl_cpu(cfg, plan, run.out_dir, on_line=_on_line)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _REGISTRY.publish_threadsafe(
                     run.id,
                     _runs.StatusEvent(run_id=run.id, status="failed", message=str(exc)),
@@ -832,6 +832,34 @@ async def api_diagnostics_hardware() -> dict[str, Any]:
 
     profile = probe_all()
     return profile.model_dump()
+
+
+@router.get("/api/diagnostics/live")
+async def api_diagnostics_live() -> dict[str, Any]:
+    """Cheap (~ms) live sample of host pressure + operator process state.
+
+    Backbone of the Advanced Admin card. Returns load avgs, RAM%, disk%,
+    and the operator's own RSS + thread count. The UI polls this at 1-2 Hz
+    while the admin card is visible.
+    """
+    from mindxtrain.operator.coach.hw_diagnostics import probe_live_metrics
+
+    return probe_live_metrics().model_dump()
+
+
+@router.get("/api/diagnostics/runs", response_model=list[_runs.Run])
+async def api_diagnostics_runs() -> list[_runs.Run]:
+    """Snapshot of every run the registry currently knows about.
+
+    Newest first. Powers the admin card's "Active runs" panel — the user
+    can see at a glance what's training, what's deploying, and which
+    runs have terminated. Same data as `/api/runs` (returned all-runs
+    rather than filtered) but lives under /api/diagnostics/* for
+    discoverability."""
+    rows = _REGISTRY.list_runs()
+    # Newest first by created_at.
+    rows.sort(key=lambda r: r.created_at, reverse=True)
+    return rows
 
 
 # ---- MEI (mindX Efficiency Index) endpoints -----------------------------

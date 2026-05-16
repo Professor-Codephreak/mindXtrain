@@ -199,6 +199,184 @@ async function runPreflight() {
   }
 }
 
+// --- advanced admin (always-on-top diagnostics) --------------------------
+
+const ADMIN_POLL_MS = 2000;
+const ADMIN_FIREHOSE_MAX = 800;  // hard cap on lines in admin firehose
+const adminState = {
+  pollTimer: null,
+  paused: false,
+  firehoseSources: new Map(),  // run_id → EventSource
+  firehoseLines: 0,
+};
+
+function _adminMetricCell(label, value, statusClass) {
+  return `<div class="admin-metric ${statusClass || ""}">` +
+         `<div class="admin-metric-label">${label}</div>` +
+         `<div class="admin-metric-value">${value}</div></div>`;
+}
+
+function _classifyPct(pct, warn = 70, bad = 90) {
+  if (pct >= bad) return "bad";
+  if (pct >= warn) return "warn";
+  return "";
+}
+
+function _classifyLoad(load, cores) {
+  if (load == null) return "";
+  const ratio = load / Math.max(1, cores);
+  if (ratio >= 1.5) return "bad";
+  if (ratio >= 1.0) return "warn";
+  return "";
+}
+
+async function refreshAdminMetrics() {
+  if (adminState.paused) return;
+  try {
+    const m = await getJSON("/coach/api/diagnostics/live");
+    const grid = $("#admin-metrics");
+    if (!grid) return;
+    const cores = m.cores || 1;
+    const load1 = m.load_avg_1m;
+    const cells = [
+      _adminMetricCell("Load 1m", load1 == null ? "—" : `${load1.toFixed(2)} / ${cores}`,
+                       _classifyLoad(load1, cores)),
+      _adminMetricCell("Load 5m", m.load_avg_5m == null ? "—" : m.load_avg_5m.toFixed(2),
+                       _classifyLoad(m.load_avg_5m, cores)),
+      _adminMetricCell("Load 15m", m.load_avg_15m == null ? "—" : m.load_avg_15m.toFixed(2),
+                       _classifyLoad(m.load_avg_15m, cores)),
+      _adminMetricCell("RAM used",
+                       `${m.ram_used_pct.toFixed(1)}% (${m.ram_available_gb.toFixed(1)} GB free)`,
+                       _classifyPct(m.ram_used_pct)),
+      _adminMetricCell("Disk used",
+                       `${m.disk_used_pct.toFixed(1)}% of ${m.disk_total_gb.toFixed(0)} GB`,
+                       _classifyPct(m.disk_used_pct, 80, 95)),
+      _adminMetricCell("Operator RSS", `${m.operator_rss_mb.toFixed(0)} MB`, ""),
+      _adminMetricCell("Operator threads", String(m.operator_threads), ""),
+      _adminMetricCell("Cores", String(cores), ""),
+    ];
+    grid.innerHTML = cells.join("");
+  } catch (e) {
+    // Silent; the admin card is non-critical.
+  }
+}
+
+function _fmtRunStart(iso) {
+  try {
+    return new Date(iso).toLocaleTimeString();
+  } catch (_) {
+    return iso;
+  }
+}
+
+async function refreshAdminRuns() {
+  if (adminState.paused) return;
+  try {
+    const runs = await getJSON("/coach/api/diagnostics/runs");
+    const tbody = $("#admin-runs-table tbody");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    for (const r of runs.slice(0, 12)) {
+      const tr = document.createElement("tr");
+      const lossStr = r.last_loss == null ? "—" : r.last_loss.toFixed(4);
+      tr.innerHTML =
+        `<td class="mono">${r.id}</td>` +
+        `<td>${r.recipe}</td>` +
+        `<td class="status-${r.status}">${r.status}</td>` +
+        `<td>${_fmtRunStart(r.created_at)}</td>` +
+        `<td>${r.last_step ?? "—"}</td>` +
+        `<td>${lossStr}</td>`;
+      tbody.appendChild(tr);
+      // Auto-subscribe firehose to any run we haven't seen yet.
+      if (!adminState.firehoseSources.has(r.id) &&
+          ["pending", "running"].includes(r.status)) {
+        _adminSubscribeFirehose(r.id);
+      }
+    }
+  } catch (e) { /* non-critical */ }
+}
+
+function _adminAppendFirehose(line) {
+  const pre = $("#admin-firehose");
+  if (!pre) return;
+  pre.appendChild(document.createTextNode(line + "\n"));
+  adminState.firehoseLines += 1;
+  while (adminState.firehoseLines > ADMIN_FIREHOSE_MAX && pre.firstChild) {
+    pre.removeChild(pre.firstChild);
+    adminState.firehoseLines -= 1;
+  }
+  if (adminState.firehoseLines % 50 === 0) {
+    _foldLogElement(pre);
+  }
+  pre.scrollTop = pre.scrollHeight;
+  $("#admin-firehose-summary").textContent =
+    `(${adminState.firehoseLines} lines · ${adminState.firehoseSources.size} runs)`;
+}
+
+function _adminSubscribeFirehose(runId) {
+  if (adminState.firehoseSources.has(runId)) return;
+  const es = new EventSource(`/coach/api/runs/${runId}/events`);
+  adminState.firehoseSources.set(runId, es);
+  const short = runId.slice(0, 8);
+  es.addEventListener("status", (e) => {
+    const ev = JSON.parse(e.data);
+    _adminAppendFirehose(`[${short}] status → ${ev.status}: ${ev.message || ""}`);
+    if (["succeeded", "failed", "cancelled"].includes(ev.status)) {
+      es.close();
+      adminState.firehoseSources.delete(runId);
+    }
+  });
+  es.addEventListener("log", (e) => {
+    const ev = JSON.parse(e.data);
+    _adminAppendFirehose(`[${short}] ${ev.line}`);
+  });
+  es.addEventListener("step", (e) => {
+    const ev = JSON.parse(e.data);
+    _adminAppendFirehose(
+      `[${short}] step=${ev.step} loss=${(ev.loss || 0).toFixed(4)} ` +
+      `lr=${ev.lr || "—"} grad_norm=${ev.grad_norm || "—"}`,
+    );
+  });
+  es.addEventListener("eval", (e) => {
+    const ev = JSON.parse(e.data);
+    _adminAppendFirehose(`[${short}] eval@${ev.step} ${JSON.stringify(ev.metrics)}`);
+  });
+  es.addEventListener("error", () => {
+    _adminAppendFirehose(`[${short}] (event stream disconnected)`);
+  });
+}
+
+function _adminStartPolling() {
+  if (adminState.pollTimer != null) return;
+  refreshAdminMetrics();
+  refreshAdminRuns();
+  adminState.pollTimer = setInterval(() => {
+    refreshAdminMetrics();
+    refreshAdminRuns();
+  }, ADMIN_POLL_MS);
+}
+
+function _adminStopPolling() {
+  if (adminState.pollTimer != null) {
+    clearInterval(adminState.pollTimer);
+    adminState.pollTimer = null;
+  }
+}
+
+function _adminTogglePoll() {
+  adminState.paused = !adminState.paused;
+  const btn = $("#admin-toggle-poll");
+  if (btn) btn.textContent = adminState.paused ? "Resume polling" : "Pause polling";
+}
+
+function _adminClearFirehose() {
+  const pre = $("#admin-firehose");
+  if (pre) pre.textContent = "";
+  adminState.firehoseLines = 0;
+  $("#admin-firehose-summary").textContent =
+    `(0 lines · ${adminState.firehoseSources.size} runs)`;
+}
+
 // --- step 2: hardware diagnostics -----------------------------------------
 
 function _hwPanelHTML(title, info, fields) {
@@ -1113,6 +1291,18 @@ async function promoteCurrentMEI() {
 window.addEventListener("DOMContentLoaded", () => {
   $("#run-preflight").addEventListener("click", runPreflight);
   $("#run-hardware").addEventListener("click", runHardware);
+
+  // Admin card: poll only when expanded; pause when collapsed. This
+  // keeps the operator process idle when nobody's looking at the panel.
+  const adminCard = $("#step-admin");
+  if (adminCard) {
+    adminCard.addEventListener("toggle", () => {
+      if (adminCard.open) _adminStartPolling();
+      else _adminStopPolling();
+    });
+    $("#admin-toggle-poll").addEventListener("click", _adminTogglePoll);
+    $("#admin-clear-firehose").addEventListener("click", _adminClearFirehose);
+  }
   $("#run-bench").addEventListener("click", runBench);
   $("#run-compile").addEventListener("click", runCompile);
   $("#run-train").addEventListener("click", runTrain);

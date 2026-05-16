@@ -362,16 +362,122 @@ def probe_all() -> HardwareProfile:
     )
 
 
+# ---- live metrics (admin panel) --------------------------------------------
+
+
+class LiveMetrics(BaseModel):
+    """Snapshot of host pressure + the operator process's own state.
+
+    Pollable at 1Hz from the Advanced Admin card. Pure stdlib — reads
+    /proc on Linux, falls back to os.getloadavg + os.statvfs elsewhere.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    load_avg_1m: float | None = None
+    load_avg_5m: float | None = None
+    load_avg_15m: float | None = None
+    ram_total_gb: float = 0.0
+    ram_available_gb: float = 0.0
+    ram_used_pct: float = 0.0
+    disk_total_gb: float = 0.0
+    disk_used_pct: float = 0.0
+    operator_rss_mb: float = 0.0
+    operator_threads: int = 0
+    cores: int = 1
+    ts: float = Field(description="Unix seconds at sample time.")
+
+
+def _read_operator_proc_stat() -> tuple[float, int]:
+    """Return (rss_mb, threads) for the current python process. (0, 0) on failure."""
+    try:
+        with Path(f"/proc/{os.getpid()}/status").open("r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return 0.0, 0
+    rss_kb = 0
+    threads = 0
+    for line in text.splitlines():
+        if line.startswith("VmRSS:"):
+            try:
+                rss_kb = int(line.split()[1])
+            except (IndexError, ValueError):
+                pass
+        elif line.startswith("Threads:"):
+            try:
+                threads = int(line.split()[1])
+            except (IndexError, ValueError):
+                pass
+    return rss_kb / 1024.0, threads
+
+
+def _disk_usage(path: str = "/") -> tuple[float, float]:
+    """Return (total_gb, used_pct) for the filesystem holding `path`."""
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return 0.0, 0.0
+    total_b = st.f_blocks * st.f_frsize
+    free_b = st.f_bavail * st.f_frsize
+    used_b = total_b - free_b
+    if total_b <= 0:
+        return 0.0, 0.0
+    return total_b / (1024 ** 3), 100.0 * used_b / total_b
+
+
+def probe_live_metrics() -> LiveMetrics:
+    """Cheap (~ms) sample of host + operator process state.
+
+    Backbone of the Advanced Admin card — the UI polls this and graphs
+    the result. Never expensive, never throws on a missing /proc entry
+    (returns zeroes / Nones so the panel renders a "—" instead of
+    crashing).
+    """
+    import time as _time
+
+    load: tuple[float, float, float] | None
+    try:
+        load = os.getloadavg()
+    except (OSError, AttributeError):
+        load = None
+
+    ram_total_gb, ram_avail_gb = _parse_meminfo()
+    ram_used_pct = (
+        100.0 * (1.0 - ram_avail_gb / ram_total_gb)
+        if ram_total_gb > 0 else 0.0
+    )
+
+    disk_total_gb, disk_used_pct = _disk_usage("/")
+    rss_mb, threads = _read_operator_proc_stat()
+
+    return LiveMetrics(
+        load_avg_1m=load[0] if load else None,
+        load_avg_5m=load[1] if load else None,
+        load_avg_15m=load[2] if load else None,
+        ram_total_gb=round(ram_total_gb, 2),
+        ram_available_gb=round(ram_avail_gb, 2),
+        ram_used_pct=round(ram_used_pct, 1),
+        disk_total_gb=round(disk_total_gb, 2),
+        disk_used_pct=round(disk_used_pct, 1),
+        operator_rss_mb=round(rss_mb, 1),
+        operator_threads=threads,
+        cores=os.cpu_count() or 1,
+        ts=_time.time(),
+    )
+
+
 __all__ = [
     "AMDGPU",
     "NVIDIAGPU",
     "AMDInfo",
     "CPUInfo",
     "HardwareProfile",
+    "LiveMetrics",
     "NVIDIAInfo",
     "probe_all",
     "probe_amd",
     "probe_cpu",
+    "probe_live_metrics",
     "probe_nvidia",
     "recommend_lane",
 ]

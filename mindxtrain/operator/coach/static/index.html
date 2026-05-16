@@ -24,6 +24,33 @@
   </header>
 
   <main>
+    <details id="step-admin" class="card admin-card">
+      <summary>
+        <h2><span class="step admin-step">⚙</span> Advanced admin</h2>
+        <span class="hint" id="admin-summary">click to expand &middot; live metrics + event firehose</span>
+      </summary>
+      <p class="prose">
+        Live system pressure (load, RAM, disk), the operator process's
+        own RSS + thread count, the current run roster, and a
+        cross-run event firehose. Auto-polls while expanded; pauses
+        when collapsed.
+      </p>
+      <div id="admin-metrics" class="admin-metrics-grid"></div>
+      <h3>Active runs</h3>
+      <table id="admin-runs-table">
+        <thead>
+          <tr><th>id</th><th>recipe</th><th>status</th><th>started</th><th>last step</th><th>loss</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <h3>Event firehose <span class="hint" id="admin-firehose-summary">(idle)</span></h3>
+      <pre id="admin-firehose" class="code log-tail" style="max-height: 280px; overflow-y: auto;"></pre>
+      <div class="train-controls">
+        <button id="admin-toggle-poll">Pause polling</button>
+        <button id="admin-clear-firehose">Clear firehose</button>
+      </div>
+    </details>
+
     <section id="step-preflight" class="card active" data-step-id="step-preflight">
       <header>
         <h2><span class="step">1</span> Preflight env</h2>
