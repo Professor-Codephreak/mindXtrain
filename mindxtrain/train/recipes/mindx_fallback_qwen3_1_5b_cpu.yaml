@@ -36,8 +36,13 @@ model:
 data:
   source: mindx_dreams
   path: /home/hacker/mindX/data/memory
-  max_samples: 256
-  seq_len: 512
+  # Conservative defaults sized to fit a 4-core Ryzen laptop with 6 GB RAM.
+  # Override with `mindxtrain train --cpu-percent N` and a recipe edit for
+  # bigger smoke runs on hosts with more headroom. Total RSS observed
+  # ~1.2 GB at these settings on SmolLM2-135M (float32 + LoRA + tokenized
+  # dataset + torch overhead).
+  max_samples: 32
+  seq_len: 256
   packing: false
 
 train:
