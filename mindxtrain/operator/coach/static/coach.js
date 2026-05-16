@@ -17,6 +17,7 @@ const state = {
   hardware: null,      // most recent HardwareProfile from /coach/api/diagnostics/hardware
   mei: null,           // most recent MEIScoreView from /coach/api/mei/score
   meiChart: null,      // Chart.js radar instance for the MEI sub-indices
+  chatBackendModel: "",  // detected ollama/vllm model name (drives /v1/chat/completions body)
 };
 
 const MAX_LOG_LINES = 2000;
@@ -453,10 +454,41 @@ async function runHardware() {
     rec.hidden = false;
     summary.textContent = `recommended: ${laneLabel}`;
     markCardDone("step-hardware");
+
+    // Auto-suggest a matching recipe so the operator gets a one-click
+    // training start. Recipe ↔ lane mapping:
+    //   trl_cpu      → mindx_fallback_qwen3_1_5b_cpu
+    //   axolotl_amd  → mindx_fallback_qwen3_1_5b_sft_lora  (1× MI300X)
+    //   axolotl_cuda → mindx_fallback_qwen3_1_5b_sft_lora  (best available)
+    // If the recipes haven't loaded yet, retry briefly — loadRecipes() is
+    // racing with us on page bootstrap.
+    const laneToRecipe = {
+      "trl_cpu": "mindx_fallback_qwen3_1_5b_cpu",
+      "axolotl_amd": "mindx_fallback_qwen3_1_5b_sft_lora",
+      "axolotl_cuda": "mindx_fallback_qwen3_1_5b_sft_lora",
+    };
+    const recipeName = laneToRecipe[p.recommended_lane];
+    if (recipeName) {
+      _autoSelectRecipeWhenReady(recipeName, 0);
+    }
   } catch (e) {
     summary.textContent = `probe failed: ${e}`;
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+function _autoSelectRecipeWhenReady(name, attempt) {
+  const card = document.querySelector(`.recipe[data-name="${name}"]`);
+  if (card) {
+    card.classList.add("recommended");
+    // Don't actually click — just mark visually. The user picks
+    // deliberately so they're not surprised by an auto-launch.
+    return;
+  }
+  if (attempt < 20) {
+    // loadRecipes() may still be in flight; retry up to ~4 seconds.
+    setTimeout(() => _autoSelectRecipeWhenReady(name, attempt + 1), 200);
   }
 }
 
@@ -1041,8 +1073,12 @@ async function probeChat() {
   try {
     const h = await getJSON("/coach/api/health");
     const status = $("#chat-status");
+    state.chatBackendModel = h.chat_backend_model || "";
     if (h.chat_backend_ready) {
-      status.textContent = `${h.chat_backend_name} ready`;
+      const qualifier = h.chat_backend_model
+        ? ` (${h.chat_backend_model})`
+        : "";
+      status.textContent = `${h.chat_backend_name}${qualifier} ready`;
       status.className = "hint ready";
       $("#chat-disabled-msg").hidden = true;
       $("#chat-form").hidden = false;
@@ -1065,7 +1101,11 @@ async function sendChat() {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        model: "mindxtrain-demo",
+        // Pass the detected backend's preferred model when known
+        // (e.g., "qwen3:0.6b" for ollama). Falls back to a generic
+        // placeholder for backends like vllm where the model loaded
+        // server-side decides regardless of what the client sends.
+        model: state.chatBackendModel || "mindxtrain-demo",
         messages: [
           { role: "system", content: "You are mindXtrain's demo agent." },
           { role: "user", content: input },

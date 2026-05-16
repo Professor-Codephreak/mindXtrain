@@ -115,6 +115,14 @@ class CoachHealthResponse(BaseModel):
     coach_version: str = "0.1.0"
     chat_backend_ready: bool = False
     chat_backend_name: str = ""
+    chat_backend_model: str = Field(
+        default="",
+        description=(
+            "When the detected backend is ollama, the first available model "
+            "name (e.g. 'qwen3:0.6b'). Empty for vllm/openai_compat or when "
+            "the probe fails."
+        ),
+    )
     recipes_available: int
 
 
@@ -220,13 +228,33 @@ async def api_cost(req: CostRequest) -> CostResponse:
 
 @router.get("/api/health", response_model=CoachHealthResponse)
 async def api_health() -> CoachHealthResponse:
-    """Coach health — does NOT require the chat backend to be live."""
-    import os
+    """Coach health.
 
-    backend = os.environ.get("AUTOMINDX_BACKEND", "")
+    Reports the auto-detected chat backend (ollama if reachable on the
+    loopback, vllm otherwise) plus a `chat_backend_ready` boolean from a
+    live reachability probe. For ollama, also includes the first model
+    name so the UI can render "ollama (qwen3:0.6b) ready".
+    """
+    from mindxtrain.operator.app import (
+        _ollama_reachable,
+        ollama_first_model,
+        resolve_backend_name,
+    )
+
+    backend = resolve_backend_name()
+    model_name = ""
+    ready = False
+    if backend == "ollama":
+        ready = _ollama_reachable()
+        if ready:
+            model_name = ollama_first_model() or ""
+    # vllm / openai_compat readiness probe is left as the existing chat-
+    # completions failure path for now — the laptop dev case (ollama) is
+    # what flips the UI's chat card from "(no backend configured)" to live.
     return CoachHealthResponse(
-        chat_backend_ready=False,  # Day-5 wiring flips this when vLLM is reachable.
+        chat_backend_ready=ready,
         chat_backend_name=backend,
+        chat_backend_model=model_name,
         recipes_available=len(list_recipes()),
     )
 
@@ -408,13 +436,40 @@ def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
                 run.id, _runs.LogEvent(run_id=run.id, line=line, level="stdout"),
             )
 
+        def _on_event(ev: dict[str, Any]) -> None:
+            """Translate trl_cpu structured logs into registry events.
+
+            Drives Coach's Chart.js loss curve directly — same kind=step
+            and kind=eval contract the axolotl subprocess streamer
+            satisfies via stdout regex.
+            """
+            kind = ev.get("kind")
+            if kind == "step":
+                _REGISTRY.publish_threadsafe(run.id, _runs.StepEvent(
+                    run_id=run.id,
+                    step=int(ev["step"]),
+                    loss=float(ev["loss"]),
+                    lr=ev.get("lr"),
+                    grad_norm=ev.get("grad_norm"),
+                    tokens_per_s=ev.get("tokens_per_s"),
+                ))
+            elif kind == "eval":
+                _REGISTRY.publish_threadsafe(run.id, _runs.EvalEvent(
+                    run_id=run.id,
+                    step=int(ev["step"]),
+                    suite=str(ev.get("suite", "mid_train")),
+                    metrics={k: float(v) for k, v in ev.get("metrics", {}).items()},
+                ))
+
         def _thread() -> None:
             _REGISTRY.publish_threadsafe(
                 run.id,
                 _runs.StatusEvent(run_id=run.id, status="running", message="cpu lane"),
             )
             try:
-                run_trl_cpu(cfg, plan, run.out_dir, on_line=_on_line)
+                run_trl_cpu(
+                    cfg, plan, run.out_dir, on_line=_on_line, on_event=_on_event,
+                )
             except Exception as exc:
                 _REGISTRY.publish_threadsafe(
                     run.id,

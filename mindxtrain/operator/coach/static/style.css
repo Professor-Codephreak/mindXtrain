@@ -179,6 +179,22 @@ textarea { width: 100%; resize: vertical; }
   border-color: var(--accent);
   background: rgba(247, 146, 30, 0.05);
 }
+.recipe.recommended {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 2px rgba(247, 146, 30, 0.25), 0 0 12px rgba(247, 146, 30, 0.15);
+  position: relative;
+}
+.recipe.recommended::after {
+  content: "recommended";
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  font-family: ui-monospace, monospace;
+}
 .recipe h3 { margin: 0 0 0.25rem; font-size: 1rem; font-family: ui-monospace, monospace; }
 .recipe .meta { color: var(--muted); font-size: 0.8rem; }
 .recipe .badge {

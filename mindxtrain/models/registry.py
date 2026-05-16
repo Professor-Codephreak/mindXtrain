@@ -155,5 +155,6 @@ from mindxtrain.models import glm51 as _glm51  # noqa: E402, F401
 from mindxtrain.models import mistral3 as _mistral3  # noqa: E402, F401
 from mindxtrain.models import phi4_mini as _phi4_mini  # noqa: E402, F401
 from mindxtrain.models import qwen35 as _qwen35  # noqa: E402, F401
+from mindxtrain.operator.backends import ollama as _ollama  # noqa: E402, F401
 from mindxtrain.operator.backends import openai_compat as _openai_compat  # noqa: E402, F401
 from mindxtrain.operator.backends import vllm as _vllm  # noqa: E402, F401

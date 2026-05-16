@@ -175,12 +175,74 @@ def _build_lora_config(cfg: XTrainConfig, LoraConfig: Any) -> Any | None:
     return None
 
 
+def _build_event_callback(
+    on_event: Callable[[dict[str, Any]], None],
+    sink: Callable[[str], None],
+) -> Any:
+    """Return a TrainerCallback that fires `on_event(dict)` per HF Trainer log.
+
+    Bridges in-process Trainer logs into the operator's SSE event stream
+    without going through stdout regex parsing. Each `on_log` call carries
+    a `{loss, learning_rate, grad_norm, …}` dict — we lift that into the
+    same shape `StepEvent` expects (step / loss / lr / grad_norm), and
+    emit `eval` + `status` events on the other Trainer hooks.
+
+    Lazy-imported `transformers.TrainerCallback` so this helper is only
+    realised when the backend actually runs (consistent with the rest of
+    this module).
+    """
+    from transformers import TrainerCallback  # type: ignore
+
+    class _CB(TrainerCallback):  # type: ignore[misc, valid-type]
+        def on_log(
+            self, args: Any, state: Any, control: Any,
+            logs: dict[str, float] | None = None, **_kw: Any,
+        ) -> None:
+            if not logs:
+                return
+            # HF Trainer emits multiple kinds of log: train step (has 'loss'),
+            # final summary (has 'train_loss'), and eval (has 'eval_loss').
+            # Map step-level logs to StepEvent.
+            if "loss" in logs:
+                on_event({
+                    "kind": "step",
+                    "step": int(state.global_step),
+                    "loss": float(logs["loss"]),
+                    "lr": float(logs["learning_rate"]) if "learning_rate" in logs else None,
+                    "grad_norm": float(logs["grad_norm"]) if "grad_norm" in logs else None,
+                    "tokens_per_s": None,
+                })
+                sink(
+                    f"[trl_cpu] step={state.global_step} loss={logs['loss']:.4f}"
+                    + (f" lr={logs['learning_rate']:.2e}" if "learning_rate" in logs else "")
+                    + (f" grad_norm={logs['grad_norm']:.3f}" if "grad_norm" in logs else ""),
+                )
+
+        def on_evaluate(
+            self, args: Any, state: Any, control: Any,
+            metrics: dict[str, float] | None = None, **_kw: Any,
+        ) -> None:
+            if not metrics:
+                return
+            clean = {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))}
+            if clean:
+                on_event({
+                    "kind": "eval",
+                    "step": int(state.global_step),
+                    "suite": "mid_train",
+                    "metrics": clean,
+                })
+
+    return _CB()
+
+
 def run_trl_cpu(
     cfg: XTrainConfig,
     plan: AutotunePlan,
     out_dir: Path,
     *,
     on_line: Callable[[str], None] | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> Path:
     """Run a TRL SFT job on CPU; return the produced checkpoint directory.
 
@@ -188,6 +250,12 @@ def run_trl_cpu(
     stream log lines uniformly across lanes. TRL doesn't emit one-line-per-
     step by default, but we forward `transformers` log records via a tiny
     handler so the streaming surface stays consistent.
+
+    `on_event` is the *structured* counterpart: each HF Trainer log fires
+    a dict with `{kind: "step", step, loss, lr, grad_norm, ...}` so the
+    Coach UI can populate its Chart.js loss curve directly, without
+    stdout-parsing the way the axolotl subprocess path does. When
+    provided, the loss chart fills in in real time during training.
 
     Applies `cfg.train.cpu_throttle` before any torch initialization so
     the thread-pool size actually caps the workload (the BLAS layers each
@@ -281,6 +349,11 @@ def run_trl_cpu(
         peft_config=peft_config,
         processing_class=tokenizer,
     )
+    # Wire the structured event callback if the caller wants per-step
+    # telemetry (Coach UI's loss chart). When `on_event` is None this is
+    # a no-op — the CLI path doesn't need it.
+    if on_event is not None:
+        trainer.add_callback(_build_event_callback(on_event, sink))
 
     sink("[trl_cpu] starting trainer.train()")
     trainer.train()

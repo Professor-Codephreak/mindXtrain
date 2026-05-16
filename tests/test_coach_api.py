@@ -108,7 +108,16 @@ def test_cost_validates_input():
     assert r.status_code == 422
 
 
-def test_health_endpoint_reports_recipes_count():
+def test_health_endpoint_reports_recipes_count(monkeypatch):
+    # Force the auto-detect probe off so the legacy "no live backend" shape
+    # holds regardless of whether ollama happens to be running on the host
+    # executing the suite. Backend-ready specifics are covered by
+    # tests/test_ollama_backend.py.
+    from mindxtrain.operator import app as operator_app
+    monkeypatch.delenv("MINDXTRAIN_BACKEND", raising=False)
+    monkeypatch.delenv("AUTOMINDX_BACKEND", raising=False)
+    monkeypatch.setattr(operator_app, "_ollama_reachable", lambda: False)
+
     r = client.get("/coach/api/health")
     assert r.status_code == 200
     data = r.json()
