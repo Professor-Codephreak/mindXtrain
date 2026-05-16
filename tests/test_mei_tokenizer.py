@@ -83,43 +83,55 @@ def test_chatml_render_defaults_role_when_missing():
 # ---- Encoding through the Rust tokenizer (requires --extra ml) ----------
 
 
+def _build_minimal_bpe_tokenizer(tmp_path):
+    """Build a tiny but valid BPE tokenizer with [UNK] registered in the
+    vocab so Rust's encode() won't reject inputs. The vocab is a single
+    [UNK] token plus pre-tokenizer byte-level — enough for the smoke
+    tests to drive a real encode/decode without an HF download.
+    """
+    from tokenizers import Tokenizer, pre_tokenizers
+    from tokenizers.models import BPE
+
+    tok = Tokenizer(BPE(vocab={"[UNK]": 0}, merges=[], unk_token="[UNK]"))
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tj = tmp_path / "tokenizer.json"
+    tok.save(str(tj))
+    # Bust the lru_cache so the test gets a fresh load.
+    from mindxtrain.eval.mei import tokenizer as tok_mod
+    tok_mod._load_tokenizer.cache_clear()
+    return tmp_path
+
+
 @pytest.mark.skipif(not _HAS_TOKENIZERS, reason="tokenizers (Rust) not installed")
 def test_encode_with_revision_returns_ids_and_hash(tmp_path):
     """End-to-end Rule 3.1: encode + revision hash for a synthetic
-    tokenizer.json. We build a minimal BPE config so the Rust loader is
-    happy."""
-    from tokenizers import Tokenizer
-    from tokenizers.models import BPE
-
-    tok = Tokenizer(BPE(unk_token="[UNK]"))
-    tj = tmp_path / "tokenizer.json"
-    tok.save(str(tj))
-
+    tokenizer.json. Uses a minimal-but-valid BPE so the Rust encoder
+    can actually run."""
+    _build_minimal_bpe_tokenizer(tmp_path)
     from mindxtrain.eval.mei.tokenizer import encode_with_revision
-    _ids, rev = encode_with_revision("hello", str(tmp_path))
+    ids, rev = encode_with_revision("hello", str(tmp_path))
     assert rev.startswith("local:")
+    # A vocab-of-one BPE collapses every input to [UNK] tokens — id 0.
+    assert all(i == 0 for i in ids)
 
 
 @pytest.mark.skipif(not _HAS_TOKENIZERS, reason="tokenizers (Rust) not installed")
 def test_count_with_scaffold_inclusive_exceeds_content_only(tmp_path):
-    """Rule 3.2: scaffold-inclusive count strictly exceeds content-only
-    (or equals if content is so large the chatml tokens are negligible —
-    but for short inputs, scaffolding dominates the delta)."""
-    from tokenizers import Tokenizer
-    from tokenizers.models import BPE
+    """Rule 3.2: scaffold-inclusive count is at least content-only count.
 
-    tok = Tokenizer(BPE(unk_token="[UNK]"))
-    tj = tmp_path / "tokenizer.json"
-    tok.save(str(tj))
-
+    On a real Qwen / Llama tokenizer it would be strictly greater (~10-25
+    extra tokens per turn). On this single-token vocab everything maps to
+    [UNK]s; the assertion is bound to character-count delta instead."""
+    _build_minimal_bpe_tokenizer(tmp_path)
     from mindxtrain.eval.mei.tokenizer import count_with_scaffold
     messages = [{"role": "system", "content": "hi"}, {"role": "user", "content": "ok"}]
     inclusive = count_with_scaffold(messages, str(tmp_path), include_scaffold=True)
     content = count_with_scaffold(messages, str(tmp_path), include_scaffold=False)
-    # On a real tokenizer, scaffold > content for tiny inputs. The
-    # minimal BPE here may collapse everything to [UNK]s — assert >=
-    # rather than > to keep the test stable across tokenizer configs.
     assert inclusive >= content
+    # The chatml scaffold adds *characters*, which on byte-level become
+    # more tokens. Sanity check: inclusive should not equal content for
+    # non-empty messages on this byte-level pre-tokenizer.
+    assert inclusive > content
 
 
 def test_unknown_path_raises_clear_runtime_error_when_no_tokenizers(monkeypatch, tmp_path):

@@ -42,9 +42,29 @@
       </div>
     </section>
 
+    <section id="step-hardware" class="card" data-step-id="step-hardware">
+      <header>
+        <h2><span class="step">2</span> Hardware available</h2>
+        <span class="hint" id="hardware-summary">probing&hellip;</span>
+      </header>
+      <p class="prose">
+        Which training lanes are reachable from this host. CPU is always
+        available (the <code>trl_cpu</code> lane); AMD GPUs surface when
+        <code>rocm-smi</code> is on PATH; NVIDIA GPUs surface when
+        <code>nvidia-smi</code> is on PATH. The "recommended lane" is the
+        most capable lane detected and matches the recipe's
+        <code>train.backend</code> field.
+      </p>
+      <div id="hardware-grid" class="hw-grid"></div>
+      <p id="hardware-recommendation" class="headline" hidden></p>
+      <div class="train-controls">
+        <button id="run-hardware">Re-probe</button>
+      </div>
+    </section>
+
     <section id="step-dream-corpus" class="card" data-step-id="step-dream-corpus">
       <header>
-        <h2><span class="step">2</span> Dream corpus</h2>
+        <h2><span class="step">3</span> Dream corpus</h2>
         <span class="hint" id="corpus-summary">waiting for preflight&hellip;</span>
       </header>
       <p class="prose">
@@ -58,7 +78,7 @@
 
     <section id="step-recipes" class="card" data-step-id="step-recipes">
       <header>
-        <h2><span class="step">3</span> Pick a recipe</h2>
+        <h2><span class="step">4</span> Pick a recipe</h2>
         <span class="hint" id="recipe-count"></span>
       </header>
       <div id="recipe-list" class="grid"></div>
@@ -70,7 +90,7 @@
 
     <section id="step-autotune" class="card" data-step-id="step-autotune">
       <header>
-        <h2><span class="step">4</span> Run the autotune probe</h2>
+        <h2><span class="step">5</span> Run the autotune probe</h2>
         <span class="hint">60&thinsp;s on MI300X &middot; CPU dry-run here</span>
       </header>
       <p class="prose">
@@ -86,7 +106,7 @@
 
     <section id="step-compile" class="card" data-step-id="step-compile">
       <header>
-        <h2><span class="step">5</span> Compile to Axolotl YAML</h2>
+        <h2><span class="step">6</span> Compile to Axolotl YAML</h2>
         <span class="hint">requires: recipe + plan</span>
       </header>
       <p class="prose">
@@ -100,7 +120,7 @@
 
     <section id="step-train" class="card" data-step-id="step-train">
       <header>
-        <h2><span class="step">6</span> Train (live)</h2>
+        <h2><span class="step">7</span> Train (live)</h2>
         <span class="hint">requires: compile complete</span>
       </header>
       <p class="prose">
@@ -136,7 +156,7 @@
 
     <section id="step-mei" class="card" data-step-id="step-mei">
       <header>
-        <h2><span class="step">7</span> mindX Efficiency Index</h2>
+        <h2><span class="step">8</span> mindX Efficiency Index</h2>
         <span class="hint" id="mei-summary">waiting for a scored run&hellip;</span>
       </header>
       <p class="prose">
@@ -177,7 +197,7 @@
 
     <section id="step-cost" class="card" data-step-id="step-cost">
       <header>
-        <h2><span class="step">8</span> Cost vs H100</h2>
+        <h2><span class="step">9</span> Cost vs H100</h2>
       </header>
       <div class="cost-controls">
         <label>GPUs <input id="cost-gpus" type="number" min="1" max="8" step="1" value="1" /></label>
@@ -195,7 +215,7 @@
 
     <section id="step-deploy" class="card" data-step-id="step-deploy">
       <header>
-        <h2><span class="step">9</span> Deploy</h2>
+        <h2><span class="step">10</span> Deploy</h2>
         <span class="hint">push to GitHub &middot; provision MI300X &middot; sync to existing droplet</span>
       </header>
       <p class="prose">
@@ -249,7 +269,7 @@
 
     <section id="step-chat" class="card" data-step-id="step-chat">
       <header>
-        <h2><span class="step">10</span> Try the model</h2>
+        <h2><span class="step">11</span> Try the model</h2>
         <span class="hint" id="chat-status">probing&hellip;</span>
       </header>
       <p class="prose" id="chat-disabled-msg">

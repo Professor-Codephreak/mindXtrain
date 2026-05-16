@@ -14,11 +14,65 @@ const state = {
   logLines: 0,         // capped at MAX_LOG_LINES client-side
   preflightReady: false,
   corpusReady: false,
+  hardware: null,      // most recent HardwareProfile from /coach/api/diagnostics/hardware
   mei: null,           // most recent MEIScoreView from /coach/api/mei/score
   meiChart: null,      // Chart.js radar instance for the MEI sub-indices
 };
 
 const MAX_LOG_LINES = 2000;
+
+// When a log accumulates more than this many lines, auto-collapse the
+// oldest ~80% into a folded sub-accordion so the operator's eye stays on
+// the most recent activity. Tuned to keep the "live tail" UX legible on
+// a 13-15" laptop screen.
+const LOG_FOLD_THRESHOLD = 400;
+const LOG_FOLD_KEEP_RECENT = 80;
+
+function _foldLogElement(pre) {
+  // Idempotent: collapses lines older than the most recent
+  // LOG_FOLD_KEEP_RECENT once `pre` has > LOG_FOLD_THRESHOLD child text
+  // nodes. Replays produce the same DOM so callers can call this on
+  // every `appendLog` without rebuilding the world.
+  const children = Array.from(pre.childNodes).filter(
+    n => n.nodeType === Node.TEXT_NODE,
+  );
+  if (children.length <= LOG_FOLD_THRESHOLD) return;
+  // Already folded earlier? Look for the sentinel <details> at the start.
+  if (pre.firstChild && pre.firstChild.tagName === "DETAILS") {
+    // The fold exists; just keep growing the visible tail. We re-fold
+    // periodically by reading the visible-tail node count and migrating
+    // overflow into the existing details summary.
+    const det = pre.firstChild;
+    const oldSummary = det.querySelector("summary");
+    const folded = det.querySelector("pre");
+    const recent = children.slice(LOG_FOLD_KEEP_RECENT * -1);
+    const earlier = children.slice(0, -recent.length);
+    for (const n of earlier) {
+      // Move into the folded pre.
+      if (n !== folded && (n.previousSibling !== det && n.parentNode === pre)) {
+        folded.appendChild(n);
+      }
+    }
+    const count = folded.childNodes.length;
+    oldSummary.textContent = `▸ ${count} earlier lines (expand)`;
+    return;
+  }
+  // First fold for this pre.
+  const recent = children.slice(LOG_FOLD_KEEP_RECENT * -1);
+  const earlier = children.slice(0, -recent.length);
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = `▸ ${earlier.length} earlier lines (expand)`;
+  const foldedPre = document.createElement("pre");
+  foldedPre.className = "log-tail folded";
+  for (const n of earlier) {
+    foldedPre.appendChild(n);
+  }
+  details.appendChild(summary);
+  details.appendChild(foldedPre);
+  // Insert the fold at the top.
+  pre.insertBefore(details, pre.firstChild);
+}
 
 // Ordered step ids — used by progressTo to compute "next" if a caller
 // doesn't pass one explicitly, and by syncPipelineHeader to pick a stage.
@@ -37,6 +91,7 @@ const STEP_ORDER = [
 // Map step ids to one of the three header pipeline stages.
 const STAGE_FOR_STEP = {
   "step-preflight":    "automind",
+  "step-hardware":     "automind",
   "step-dream-corpus": "automind",
   "step-recipes":      "mind",
   "step-autotune":     "mind",
@@ -126,7 +181,9 @@ async function runPreflight() {
       badge.className = "badge-status succeeded";
       badge.hidden = false;
       markCardDone("step-preflight");
-      // Auto-advance to corpus check.
+      // Auto-advance: env check → hardware probe → corpus check.
+      progressTo("step-hardware");
+      await runHardware();
       progressTo("step-dream-corpus");
       runDreamCorpus();
     } else {
@@ -142,7 +199,90 @@ async function runPreflight() {
   }
 }
 
-// --- step 2: dream corpus ---------------------------------------------------
+// --- step 2: hardware diagnostics -----------------------------------------
+
+function _hwPanelHTML(title, info, fields) {
+  const cls = info.available && (fields.gpus ? fields.gpus.length > 0 : true)
+    ? "hw-panel hw-ok"
+    : "hw-panel hw-off";
+  const fieldRows = (fields.entries || []).map(
+    ([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`,
+  ).join("");
+  const noteHTML = info.note
+    ? `<p class="hint hw-note">${info.note}</p>` : "";
+  return `
+    <div class="${cls}">
+      <h3>${title}</h3>
+      <dl>${fieldRows}</dl>
+      ${noteHTML}
+    </div>`;
+}
+
+function _fmtGB(v) {
+  return typeof v === "number" ? `${v.toFixed(1)} GB` : "—";
+}
+
+async function runHardware() {
+  const summary = $("#hardware-summary");
+  const grid = $("#hardware-grid");
+  const rec = $("#hardware-recommendation");
+  const btn = $("#run-hardware");
+  if (btn) btn.disabled = true;
+  summary.textContent = "probing…";
+  try {
+    const p = await getJSON("/coach/api/diagnostics/hardware");
+    state.hardware = p;
+    // CPU panel — always available.
+    const cpu = p.cpu || {};
+    const cpuEntries = [
+      ["model", cpu.model_name || "CPU"],
+      ["vendor", cpu.vendor || "—"],
+      ["cores", `${cpu.cores || 0} (Ryzen: ${cpu.is_ryzen ? "yes" : "no"})`],
+      ["RAM", `${_fmtGB(cpu.ram_available_gb)} avail / ${_fmtGB(cpu.ram_total_gb)} total`],
+      ["load 1m", cpu.load_avg_1m == null ? "—" : cpu.load_avg_1m.toFixed(2)],
+    ];
+    // AMD panel.
+    const amd = p.amd || {};
+    const amdGPUs = amd.gpus || [];
+    const amdEntries = amd.available
+      ? [
+          ["ROCm", amd.rocm_version || "—"],
+          ...amdGPUs.map((g, i) => [`gpu${i}`, `${g.name} · ${_fmtGB(g.vram_gb)}`]),
+        ]
+      : [["status", "not detected"]];
+    // NVIDIA panel.
+    const nv = p.nvidia || {};
+    const nvGPUs = nv.gpus || [];
+    const nvEntries = nv.available
+      ? [
+          ["driver", nv.driver_version || "—"],
+          ["CUDA", nv.cuda_version || "—"],
+          ...nvGPUs.map((g, i) => [`gpu${i}`, `${g.name} · ${_fmtGB(g.vram_gb)}`]),
+        ]
+      : [["status", "not detected"]];
+
+    grid.innerHTML =
+      _hwPanelHTML("CPU", cpu, { entries: cpuEntries }) +
+      _hwPanelHTML("AMD GPU", amd, { entries: amdEntries, gpus: amdGPUs }) +
+      _hwPanelHTML("NVIDIA GPU", nv, { entries: nvEntries, gpus: nvGPUs });
+
+    const laneLabel = {
+      "axolotl_amd": "AMD GPU (axolotl)",
+      "axolotl_cuda": "NVIDIA GPU (axolotl)",
+      "trl_cpu": "CPU (trl_cpu)",
+    }[p.recommended_lane] || p.recommended_lane;
+    rec.innerHTML = `Recommended lane: <strong>${laneLabel}</strong>`;
+    rec.hidden = false;
+    summary.textContent = `recommended: ${laneLabel}`;
+    markCardDone("step-hardware");
+  } catch (e) {
+    summary.textContent = `probe failed: ${e}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// --- step 3: dream corpus ---------------------------------------------------
 
 async function runDreamCorpus() {
   const summary = $("#corpus-summary");
@@ -363,6 +503,10 @@ function appendLog(ev) {
       state.logLines -= 1;
     }
   }
+  // Re-fold every 50 lines so the DOM stays compact on long runs.
+  if (state.logLines % 50 === 0) {
+    _foldLogElement(pre);
+  }
   pre.scrollTop = pre.scrollHeight;
 }
 
@@ -499,6 +643,9 @@ function attachDeployStream(runId, opts) {
         logEl.removeChild(logEl.firstChild);
         lineCount -= 1;
       }
+    }
+    if (lineCount % 50 === 0) {
+      _foldLogElement(logEl);
     }
     logEl.scrollTop = logEl.scrollHeight;
   };
@@ -965,6 +1112,7 @@ async function promoteCurrentMEI() {
 
 window.addEventListener("DOMContentLoaded", () => {
   $("#run-preflight").addEventListener("click", runPreflight);
+  $("#run-hardware").addEventListener("click", runHardware);
   $("#run-bench").addEventListener("click", runBench);
   $("#run-compile").addEventListener("click", runCompile);
   $("#run-train").addEventListener("click", runTrain);
@@ -994,5 +1142,6 @@ window.addEventListener("DOMContentLoaded", () => {
   refreshGithubStatus();
   refreshDropletStatus();
   refreshMEIHistory();
+  runHardware();
   runPreflight();
 });

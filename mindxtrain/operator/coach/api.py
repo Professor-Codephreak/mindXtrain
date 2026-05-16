@@ -776,6 +776,24 @@ async def api_droplet_list(name: str | None = None) -> list[dict[str, Any]]:
         return client.list(name=name)
 
 
+# ---- hardware diagnostics ------------------------------------------------
+
+
+@router.get("/api/diagnostics/hardware")
+async def api_diagnostics_hardware() -> dict[str, Any]:
+    """Return a CPU/AMD/NVIDIA hardware profile + recommended training lane.
+
+    The probes shell out to `rocm-smi` / `nvidia-smi` when available.
+    Each probe has a short timeout so a hung driver tool can't stall the
+    Coach UI. The composite profile is JSON-stable: the UI can poll this
+    repeatedly to refresh hardware state (e.g., after `rocm` installs).
+    """
+    from mindxtrain.operator.coach.hw_diagnostics import probe_all
+
+    profile = probe_all()
+    return profile.model_dump()
+
+
 # ---- MEI (mindX Efficiency Index) endpoints -----------------------------
 # Surface the score layer for the Coach UI. The score itself is computed
 # in `mindxtrain.eval.mei.score`; this layer reads the history ledger and
