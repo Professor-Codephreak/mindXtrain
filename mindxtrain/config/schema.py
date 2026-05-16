@@ -296,6 +296,78 @@ class FsdpCfg(BaseModel):
     auto_wrap: bool = True
 
 
+class CPUThrottleCfg(BaseModel):
+    """CPU throttle for the `trl_cpu` lane — keeps the dev laptop usable.
+
+    `percent` is the fraction of available cores to use during training.
+    Resolved to an integer thread count via `resolve_thread_count`; thread
+    counts under 1 are clamped to 1 so training never deadlocks on a zero
+    thread pool.
+
+    `nice_level` shifts the training process's scheduler priority — useful
+    on a single-user laptop where you want to keep the UI responsive while
+    training runs in the background. 0 = default, 10 = visibly de-
+    prioritized but still progresses.
+
+    `omp_proc_bind` enables Ryzen-aware OpenMP affinity (`OMP_PROC_BIND=close`,
+    `OMP_PLACES=cores`). Helps on CCX-topology CPUs by keeping threads on
+    the same chiplet — reduces inter-core latency for the small matmuls
+    that dominate CPU training.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    percent: int = Field(
+        default=100,
+        ge=1,
+        le=100,
+        description=(
+            "Percent of available cores to use during CPU training. "
+            "100 = full host (default; matches the prior behaviour). "
+            "50 = half the cores. 1 = single-thread (slowest)."
+        ),
+    )
+    nice_level: int = Field(
+        default=0,
+        ge=-20,
+        le=19,
+        description=(
+            "POSIX nice level for the training process. 0 = default. "
+            "Positive values de-prioritise the trainer so a desktop UI "
+            "stays responsive during training. Requires CAP_SYS_NICE for "
+            "negative values (root) — schema accepts but `os.nice` will "
+            "raise if unauthorised."
+        ),
+    )
+    omp_proc_bind: bool = Field(
+        default=True,
+        description=(
+            "When True, sets OMP_PROC_BIND=close + OMP_PLACES=cores so "
+            "OpenMP threads bind to the same CCX chiplet on Ryzen / EPYC. "
+            "Improves cache locality for the small matmuls that dominate "
+            "CPU training; safe to leave on for non-AMD CPUs too."
+        ),
+    )
+
+
+def resolve_thread_count(percent: int, total_cores: int) -> int:
+    """Map a percentage [1, 100] to an integer thread count.
+
+    Floor at 1 — training can never run on zero threads. Ceiling at
+    `total_cores` (passing percent=100 on a 4-core box returns 4, never
+    5). Used by the trl_cpu backend to size torch / OpenMP / BLAS thread
+    pools uniformly.
+    """
+    if total_cores < 1:
+        msg = f"total_cores must be ≥ 1; got {total_cores}"
+        raise ValueError(msg)
+    if not 1 <= percent <= 100:
+        msg = f"percent must be in [1, 100]; got {percent}"
+        raise ValueError(msg)
+    threads = (total_cores * percent) // 100
+    return max(1, min(total_cores, threads))
+
+
 class TrainCfg(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -308,6 +380,7 @@ class TrainCfg(BaseModel):
     gradient_checkpointing: bool = True
     flash_attention: FlashAttentionCfg = Field(default_factory=FlashAttentionCfg)
     fsdp: FsdpCfg = Field(default_factory=FsdpCfg)
+    cpu_throttle: CPUThrottleCfg = Field(default_factory=CPUThrottleCfg)
     env: dict[str, str] = Field(
         default_factory=lambda: {
             "HSA_NO_SCRATCH_RECLAIM": "1",

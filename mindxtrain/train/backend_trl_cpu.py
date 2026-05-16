@@ -17,12 +17,75 @@ must succeed on a base install, but calling `run_trl_cpu` requires
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 from mindxtrain.autotune.plan import AutotunePlan
-from mindxtrain.config.schema import LoraMethod, QLoraMethod, XTrainConfig
+from mindxtrain.config.schema import (
+    LoraMethod,
+    QLoraMethod,
+    XTrainConfig,
+    resolve_thread_count,
+)
+
+
+def _apply_cpu_throttle(cfg: XTrainConfig, sink: Callable[[str], None]) -> int:
+    """Apply the recipe's `cfg.train.cpu_throttle` to the current process.
+
+    Resolves percent → thread count against the host's actual core count,
+    sets every thread-pool env var the downstream stack respects (torch,
+    OpenMP, MKL, OpenBLAS), optionally pins OpenMP threads to cores via
+    OMP_PROC_BIND=close + OMP_PLACES=cores (Ryzen-friendly: keeps threads
+    on the same CCX chiplet, reduces cross-CCX cache traffic for the
+    small matmuls CPU training does), and shifts the process's POSIX nice
+    level so the rest of the laptop stays usable.
+
+    Must be called BEFORE torch is imported / first used, otherwise the
+    thread-pool size is locked at whatever torch saw on first init.
+
+    Returns the resolved thread count for logging.
+    """
+    throttle = cfg.train.cpu_throttle
+    total_cores = os.cpu_count() or 1
+    threads = resolve_thread_count(throttle.percent, total_cores)
+
+    # Set every thread-pool env var the downstream stack reads. PyTorch's
+    # ATen reads OMP_NUM_THREADS at first init; MKL and OpenBLAS each
+    # have their own knob. All must agree to actually cap the workload.
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    os.environ["MKL_NUM_THREADS"] = str(threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(threads)
+    os.environ["NUMEXPR_NUM_THREADS"] = str(threads)
+    # tokenizers (HF Rust lib) has its own parallelism that BLAS doesn't
+    # cap. Disable it during throttled runs — for a 135M smoke on 1-2
+    # threads, the tokenizer-side parallelism only thrashes the cache.
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false" if threads <= 2 else "true")
+
+    if throttle.omp_proc_bind:
+        # CCX-aware pinning. `close` = threads adjacent to the master;
+        # `cores` = one thread per physical core. Both safe on non-AMD
+        # CPUs; ignored by OpenMP runtimes that don't honor them.
+        os.environ["OMP_PROC_BIND"] = "close"
+        os.environ["OMP_PLACES"] = "cores"
+
+    if throttle.nice_level != 0:
+        try:
+            os.nice(throttle.nice_level)
+            sink(f"[trl_cpu] nice level set to {throttle.nice_level}")
+        except (PermissionError, OSError) as exc:
+            # Negative nice needs CAP_SYS_NICE. Surface, don't fail.
+            sink(
+                f"[trl_cpu] nice({throttle.nice_level}) refused "
+                f"({type(exc).__name__}: {exc}) — continuing without it",
+            )
+
+    sink(
+        f"[trl_cpu] throttle: {throttle.percent}% of {total_cores} cores "
+        f"→ {threads} thread(s); OMP_PROC_BIND={'close' if throttle.omp_proc_bind else 'off'}",
+    )
+    return threads
 
 
 def _require_ml_deps() -> dict[str, Any]:
@@ -125,7 +188,15 @@ def run_trl_cpu(
     stream log lines uniformly across lanes. TRL doesn't emit one-line-per-
     step by default, but we forward `transformers` log records via a tiny
     handler so the streaming surface stays consistent.
+
+    Applies `cfg.train.cpu_throttle` before any torch initialization so
+    the thread-pool size actually caps the workload (the BLAS layers each
+    snapshot their thread count on first use; setting them after torch
+    imports has zero effect).
     """
+    sink = on_line if on_line is not None else (lambda _line: None)
+    threads = _apply_cpu_throttle(cfg, sink)
+
     deps = _require_ml_deps()
     Dataset = deps["Dataset"]
     AutoModelForCausalLM = deps["AutoModelForCausalLM"]
@@ -136,16 +207,40 @@ def run_trl_cpu(
 
     import torch  # type: ignore
 
+    # ATen reads OMP_NUM_THREADS at init, but `set_num_threads` is the
+    # canonical knob — call both belt-and-suspenders. interop_threads
+    # governs inter-op parallelism (cross-kernel scheduling); for a
+    # throttled run we keep them equal.
+    torch.set_num_threads(threads)
+    try:
+        torch.set_num_interop_threads(threads)
+    except RuntimeError:
+        # set_num_interop_threads must be called before any aten ops run.
+        # If we're too late, torch raises; the OMP env var is the fallback.
+        pass
+
     out_dir = Path(out_dir)
     checkpoint_dir = out_dir / "checkpoint"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    sink = on_line if on_line is not None else (lambda _line: None)
     sink(f"[trl_cpu] base={cfg.model.name} method={cfg.train.method.kind}")
 
     tokenizer = AutoTokenizer.from_pretrained(cfg.model.name, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # Some base tokenizers (e.g., SmolLM2-135M) don't ship a chat
+    # template. The dream corpus is ChatML-shaped already, so we set
+    # ChatML explicitly when missing — matches what mindX's machine_
+    # dreaming phase 5b emits. Qwen / Llama base models keep their own
+    # template untouched.
+    if getattr(tokenizer, "chat_template", None) is None:
+        tokenizer.chat_template = (
+            "{% for message in messages %}"
+            "<|im_start|>{{ message['role'] }}\n{{ message['content'] }}<|im_end|>\n"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
+        )
+        sink("[trl_cpu] tokenizer had no chat_template; set ChatML default.")
 
     sink("[trl_cpu] materializing dataset (in-memory)")
     dataset = _materialize_dataset(cfg, Dataset)

@@ -117,11 +117,45 @@ def train(
     config: Path = typer.Argument(..., help="path to XTrainConfig YAML"),
     plan_path: Path = typer.Option(None, "--plan", help="autotune plan JSON; falls back to dry-run."),
     out: Path = typer.Option(Path("./out/runs"), "--out", "-o", help="run output root"),
+    cpu_percent: int | None = typer.Option(
+        None, "--cpu-percent",
+        help=(
+            "Override `train.cpu_throttle.percent` at runtime. Applies "
+            "only to the trl_cpu backend. 1-100; below 1 or above 100 errors."
+        ),
+    ),
+    cpu_nice: int | None = typer.Option(
+        None, "--cpu-nice",
+        help="Override `train.cpu_throttle.nice_level`. -20..19.",
+    ),
 ) -> None:
-    """Dispatch a training run via the configured backend."""
+    """Dispatch a training run via the configured backend.
+
+    With --cpu-percent N, the trl_cpu backend caps every thread pool
+    (torch, OpenMP, MKL, OpenBLAS) at N% of the host's cores. Useful for
+    leaving cycles free for the rest of the laptop while training runs in
+    the background.
+    """
+    from mindxtrain.config.schema import CPUThrottleCfg
     from mindxtrain.train import dispatch_training
 
     cfg = load_config(config)
+    # CLI override: rebuild train.cpu_throttle if either knob was passed.
+    if cpu_percent is not None or cpu_nice is not None:
+        throttle = cfg.train.cpu_throttle
+        new_throttle = CPUThrottleCfg(
+            percent=cpu_percent if cpu_percent is not None else throttle.percent,
+            nice_level=cpu_nice if cpu_nice is not None else throttle.nice_level,
+            omp_proc_bind=throttle.omp_proc_bind,
+        )
+        # Pydantic frozen=True forbids in-place mutation; rebuild via model_copy.
+        new_train = cfg.train.model_copy(update={"cpu_throttle": new_throttle})
+        cfg = cfg.model_copy(update={"train": new_train})
+        console.print(
+            f"[dim]cpu_throttle overridden: percent={new_throttle.percent} "
+            f"nice={new_throttle.nice_level}[/dim]",
+        )
+
     plan = _load_plan(plan_path)
     run_dir = out / cfg.meta.run_name
     try:

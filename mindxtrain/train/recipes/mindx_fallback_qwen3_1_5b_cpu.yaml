@@ -64,6 +64,14 @@ train:
     backend: ck
   fsdp:
     enabled: false
+  cpu_throttle:
+    # Half the host's cores, de-prioritised. Suitable for a 4-core
+    # Ryzen laptop where you want to keep the rest of the system
+    # responsive during training. Override at runtime with
+    # `mindxtrain train ... --cpu-percent N --cpu-nice M`.
+    percent: 50
+    nice_level: 10
+    omp_proc_bind: true
   env:
     PYTORCH_ROCM_ARCH: "gfx942"
     HSA_NO_SCRATCH_RECLAIM: "1"
