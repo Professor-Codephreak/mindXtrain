@@ -656,6 +656,12 @@ async def api_run_push_to_ollama(
 
     tag = req.tag or snap.recipe
 
+    # Bind the registry to the current loop so the threaded merge can publish
+    # back into it via call_soon_threadsafe. Without this, repeat requests
+    # under TestClient (which closes its loop after each call) hit
+    # "Event loop is closed" the second time around.
+    _REGISTRY.attach_loop(asyncio.get_running_loop())
+
     def _log(line: str) -> None:
         _REGISTRY.publish_threadsafe(
             run_id, _runs.LogEvent(run_id=run_id, line=line, level="stdout"),
