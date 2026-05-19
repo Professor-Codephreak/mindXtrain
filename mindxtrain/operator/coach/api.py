@@ -601,6 +601,17 @@ class PushToOllamaRequest(BaseModel):
             "differs from the recipe's `model.name` field."
         ),
     )
+    register_with_mindx: bool = Field(
+        default=False,
+        description=(
+            "After ollama create succeeds, PATCH the new tag into mindX as "
+            "the local fallback (best-effort; failure does NOT abort the push)."
+        ),
+    )
+    mindx_base_url: str | None = Field(
+        default=None,
+        description="Override the mindX base URL for the fallback PATCH.",
+    )
 
 
 class PushToOllamaResponse(BaseModel):
@@ -608,6 +619,8 @@ class PushToOllamaResponse(BaseModel):
     tag: str
     merged_dir: str
     modelfile: str
+    mindx_fallback_swapped: bool = False
+    mindx_fallback_swap: dict[str, str] | None = None
     message: str = "pushed"
 
 
@@ -684,6 +697,8 @@ async def api_run_push_to_ollama(
             tag=tag,
             system_prompt=req.system_prompt,
             sink=_log,
+            register_with_mindx=req.register_with_mindx,
+            mindx_base_url=req.mindx_base_url,
         )
     except (FileNotFoundError, ImportError) as exc:
         _REGISTRY.publish(
@@ -705,11 +720,14 @@ async def api_run_push_to_ollama(
             run_id=run_id, status="succeeded", message=f"pushed to ollama as {result.tag}",
         ),
     )
+    swap = result.mindx_fallback_swap
     return PushToOllamaResponse(
         run_id=run_id,
         tag=result.tag,
         merged_dir=str(result.merged_dir),
         modelfile=str(result.modelfile),
+        mindx_fallback_swapped=swap is not None,
+        mindx_fallback_swap=swap,
     )
 
 

@@ -24,7 +24,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checkpoint becomes mindX's active default without a source edit. Pairs with
   the mindX-side endpoint shipped in AgenticPlace/mindX@ad8193ea3.
 - Two new YAML recipes: `mindx_fallback_qwen3_1_5b_sft_lora` (Qwen3-1.5B
-  LoRA on MI300X, the production target) and `mindx_fallback_qwen3_1_5b_cpu`
+  LoRA on MI300X, the production target) and `mindx_fallback_qwen3_1_5b_cpu_smoke`
   (SmolLM2-135M CPU smoke).
 - `.env.example`: `MINDXTRAIN_API_KEY` and `MINDXTRAIN_MINDX_HOME`.
 

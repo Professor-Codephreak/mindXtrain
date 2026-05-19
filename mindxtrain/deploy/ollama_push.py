@@ -30,6 +30,12 @@ class OllamaPushResult:
     merged_dir: Path
     modelfile: Path
     ollama_stdout: str
+    # When push_to_ollama was called with register_with_mindx=True and
+    # the PATCH succeeded, this holds the mindX response
+    # ({previous, current, ...}). None when registration was skipped or
+    # failed (failure logs through `sink` but does not abort the push —
+    # the merged + tagged artefact still lands locally).
+    mindx_fallback_swap: dict[str, str] | None = None
 
 
 def merge_lora_adapter(
@@ -157,6 +163,8 @@ def push_to_ollama(
     parameters: dict[str, float | int | str] | None = None,
     sink: Callable[[str], None] | None = None,
     ollama_bin: str | None = None,
+    register_with_mindx: bool = False,
+    mindx_base_url: str | None = None,
 ) -> OllamaPushResult:
     """End-to-end: merge LoRA → Modelfile → ollama create.
 
@@ -164,6 +172,15 @@ def push_to_ollama(
     directory lives at `work_dir/merged/`; the Modelfile at
     `work_dir/Modelfile`. Both are kept around so the operator can re-run
     `ollama create` without redoing the merge.
+
+    When `register_with_mindx=True`, after a successful `ollama create`
+    we PATCH `<mindx_base_url>/v1/config/fallback-model` with
+    `{provider: "ollama", model: <tag>}` so the freshly pushed tag
+    becomes mindX's local fallback model. The PATCH is best-effort —
+    a failure logs through `sink` and lands in `OllamaPushResult` as
+    `mindx_fallback_swap=None`, but does NOT raise. The point of this
+    flag is "close the dream → train → fallback loop without manual
+    intervention"; a stopped mindX daemon shouldn't kill the push.
     """
     work = work_dir or adapter_dir.parent / "ollama_push"
     merged_dir = merge_lora_adapter(
@@ -174,8 +191,32 @@ def push_to_ollama(
         system_prompt=system_prompt, template=template, parameters=parameters,
     )
     stdout = ollama_create(tag, modelfile, sink=sink, ollama_bin=ollama_bin)
+
+    swap_result: dict[str, str] | None = None
+    if register_with_mindx:
+        _emit = sink or (lambda _line: None)
+        try:
+            # Lazy-imported so the deploy module stays importable on
+            # hosts without the publish-side dep tree warmed up.
+            from mindxtrain.deploy.api_client import swap_mindx_fallback_model
+
+            _emit(f"[push-ollama] registering {tag} with mindX as fallback")
+            swap_result = swap_mindx_fallback_model(
+                provider="ollama", model=tag, api_url=mindx_base_url,
+            )
+            _emit(
+                f"[push-ollama] mindX swap: "
+                f"{swap_result.get('previous', '?')} -> "
+                f"{swap_result.get('current', '?')}",
+            )
+        except Exception as exc:
+            # Swallow — see docstring rationale.
+            _emit(f"[push-ollama] mindX registration failed (push still ok): {exc}")
+            swap_result = None
+
     return OllamaPushResult(
-        tag=tag, merged_dir=merged_dir, modelfile=modelfile, ollama_stdout=stdout,
+        tag=tag, merged_dir=merged_dir, modelfile=modelfile,
+        ollama_stdout=stdout, mindx_fallback_swap=swap_result,
     )
 
 

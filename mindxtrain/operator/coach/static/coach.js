@@ -457,13 +457,15 @@ async function runHardware() {
 
     // Auto-suggest a matching recipe so the operator gets a one-click
     // training start. Recipe ↔ lane mapping:
-    //   trl_cpu      → mindx_fallback_qwen3_1_5b_cpu
+    //   trl_cpu      → mindx_fallback_qwen3_1_5b_cpu_real  (full ~2 hr fine-tune)
     //   axolotl_amd  → mindx_fallback_qwen3_1_5b_sft_lora  (1× MI300X)
     //   axolotl_cuda → mindx_fallback_qwen3_1_5b_sft_lora  (best available)
+    // The _smoke recipe stays available in the grid for tests + CI — UI
+    // just doesn't recommend it because it won't actually adapt the model.
     // If the recipes haven't loaded yet, retry briefly — loadRecipes() is
     // racing with us on page bootstrap.
     const laneToRecipe = {
-      "trl_cpu": "mindx_fallback_qwen3_1_5b_cpu",
+      "trl_cpu": "mindx_fallback_qwen3_1_5b_cpu_real",
       "axolotl_amd": "mindx_fallback_qwen3_1_5b_sft_lora",
       "axolotl_cuda": "mindx_fallback_qwen3_1_5b_sft_lora",
     };
@@ -825,7 +827,10 @@ async function pushTrainedRunToOllama() {
   try {
     // The log lines fire through the train SSE channel — the user is
     // already watching #train-log, so the merge progress shows up there.
-    const body = tag ? { tag } : {};
+    const registerFallback = ($("#register-fallback") || {}).checked === true;
+    const body = {};
+    if (tag) body.tag = tag;
+    if (registerFallback) body.register_with_mindx = true;
     const r = await fetch(
       `/coach/api/runs/${encodeURIComponent(state.run.id)}/push-to-ollama`,
       {
@@ -840,7 +845,15 @@ async function pushTrainedRunToOllama() {
       status.className = "hint bad";
       return;
     }
-    status.textContent = `pushed: ${data.tag} (${data.merged_dir})`;
+    let msg = `pushed: ${data.tag} (${data.merged_dir})`;
+    if (data.mindx_fallback_swapped && data.mindx_fallback_swap) {
+      const prev = data.mindx_fallback_swap.previous || "?";
+      const cur = data.mindx_fallback_swap.current || "?";
+      msg += ` · mindX fallback: ${prev} → ${cur}`;
+    } else if (registerFallback) {
+      msg += " · mindX swap failed (see log)";
+    }
+    status.textContent = msg;
     status.className = "hint ready";
     // Re-probe so the chat card flips to the freshly pushed model on its
     // next status read.

@@ -222,7 +222,7 @@ curl http://localhost:8080/coach/api/health
 curl -X POST http://localhost:8080/v1/training/jobs \
   -H "Authorization: Bearer $MINDXTRAIN_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"recipe":"mindx_fallback_qwen3_1_5b_cpu"}'
+  -d '{"recipe":"mindx_fallback_qwen3_1_5b_cpu_smoke"}'
 # → {"job_id":"...", "status":"running", "backend":"trl_cpu", ...}
 
 # Reverse-proxy mindx.pythai.net → MI300X:8080 (Caddy/Cloudflare).

@@ -10,7 +10,7 @@
 #   unreachable.
 #
 # Burn estimate: ~$10-15 of the $100 AMD credit envelope. Smoke-test first with
-# `mindx_fallback_qwen3_1_5b_cpu.yaml` to verify the pipeline closes locally.
+# `mindx_fallback_qwen3_1_5b_cpu_smoke.yaml` to verify the pipeline closes locally.
 meta:
   project: mindx_self_training
   run_name: mindx_fallback_qwen3_1_5b

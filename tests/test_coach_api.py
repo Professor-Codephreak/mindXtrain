@@ -40,7 +40,7 @@ def test_recipes_list_includes_known_recipes():
     assert "qwen3_8b_sft_lora" in names
     assert "instella_3b_lora" in names
     assert "mindx_fallback_qwen3_1_5b_sft_lora" in names
-    assert "mindx_fallback_qwen3_1_5b_cpu" in names
+    assert "mindx_fallback_qwen3_1_5b_cpu_smoke" in names
     for item in items:
         assert "base_model" in item
         assert "method" in item

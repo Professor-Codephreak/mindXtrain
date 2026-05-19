@@ -311,8 +311,32 @@ def run_trl_cpu(
         sink("[trl_cpu] tokenizer had no chat_template; set ChatML default.")
 
     sink("[trl_cpu] materializing dataset (in-memory)")
-    dataset = _materialize_dataset(cfg, Dataset)
-    sink(f"[trl_cpu] dataset size={len(dataset)}")
+    full_dataset = _materialize_dataset(cfg, Dataset)
+    sink(f"[trl_cpu] dataset size={len(full_dataset)}")
+
+    # Optional train/eval split — deterministic via meta.seed so the same
+    # recipe always carves the same held-out rows. When eval_split is
+    # None we pass the full dataset to SFTTrainer (legacy behaviour);
+    # otherwise we split, pass train_dataset + eval_dataset, and turn on
+    # step-based evaluation so eval_loss appears in log_history.
+    train_dataset = full_dataset
+    eval_dataset = None
+    if cfg.data.eval_split is not None:
+        n = len(full_dataset)
+        if n < 4:
+            sink(
+                f"[trl_cpu] dataset too small ({n} rows) for eval_split="
+                f"{cfg.data.eval_split}; skipping held-out split",
+            )
+        else:
+            split = full_dataset.train_test_split(
+                test_size=cfg.data.eval_split, seed=cfg.meta.seed,
+            )
+            train_dataset, eval_dataset = split["train"], split["test"]
+            sink(
+                f"[trl_cpu] split: train={len(train_dataset)} "
+                f"eval={len(eval_dataset)} (seed={cfg.meta.seed})",
+            )
 
     sink("[trl_cpu] loading base model on CPU (float32)")
     model = AutoModelForCausalLM.from_pretrained(
@@ -324,7 +348,22 @@ def run_trl_cpu(
 
     peft_config = _build_lora_config(cfg, LoraConfig)
 
-    sft_args = SFTConfig(
+    # Estimate max_steps so we can floor logging_steps + eval_steps for
+    # short runs. HF Trainer computes max_steps as
+    # num_epochs * (len(train_dataset) // (batch * grad_accum)). When
+    # packing is on, sample count drops post-tokenization — this estimate
+    # is a lower bound but good enough for the cadence floor.
+    eff_batch = max(1, min(cfg.train.batch.per_device, 2)) * cfg.train.batch.grad_accum
+    est_max_steps = max(1, (len(train_dataset) // eff_batch) * cfg.train.schedule.epochs)
+    effective_logging_steps = max(1, min(cfg.train.logging_steps, max(1, est_max_steps // 4)))
+    effective_eval_steps = max(1, est_max_steps // 4)
+    sink(
+        f"[trl_cpu] est_max_steps={est_max_steps} "
+        f"logging_steps={effective_logging_steps} "
+        f"eval_steps={effective_eval_steps if eval_dataset is not None else 'off'}",
+    )
+
+    sft_kwargs: dict[str, Any] = dict(
         output_dir=str(checkpoint_dir),
         num_train_epochs=cfg.train.schedule.epochs,
         per_device_train_batch_size=max(1, min(cfg.train.batch.per_device, 2)),
@@ -333,7 +372,7 @@ def run_trl_cpu(
         warmup_ratio=cfg.train.schedule.warmup_ratio,
         max_length=cfg.data.seq_len,
         packing=cfg.data.packing,
-        logging_steps=10,
+        logging_steps=effective_logging_steps,
         save_strategy="epoch",
         report_to="none",
         bf16=False,
@@ -341,14 +380,22 @@ def run_trl_cpu(
         gradient_checkpointing=False,  # CPU + checkpointing is pathologically slow
         seed=cfg.meta.seed,
     )
+    if eval_dataset is not None:
+        sft_kwargs["eval_strategy"] = "steps"
+        sft_kwargs["eval_steps"] = effective_eval_steps
+        sft_kwargs["per_device_eval_batch_size"] = max(1, min(cfg.train.batch.per_device, 2))
+    sft_args = SFTConfig(**sft_kwargs)
 
-    trainer = SFTTrainer(
+    trainer_kwargs: dict[str, Any] = dict(
         model=model,
         args=sft_args,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
         peft_config=peft_config,
         processing_class=tokenizer,
     )
+    if eval_dataset is not None:
+        trainer_kwargs["eval_dataset"] = eval_dataset
+    trainer = SFTTrainer(**trainer_kwargs)
     # Wire the structured event callback if the caller wants per-step
     # telemetry (Coach UI's loss chart). When `on_event` is None this is
     # a no-op — the CLI path doesn't need it.

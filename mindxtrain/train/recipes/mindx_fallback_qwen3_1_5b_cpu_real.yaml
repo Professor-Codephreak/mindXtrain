@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: Apache-2.0
+# CPU "real" variant of the mindX local-fallback recipe.
+#
+# Purpose: actually adapt the base model to the mindX dream corpus on a
+# CPU-only laptop. Unlike the `_smoke` recipe (which produces a real
+# checkpoint but on too few samples to learn), this one trains long
+# enough to move loss measurably and (via eval_split) lets you see if
+# the adapter is generalising.
+#
+# Wall time: ~1.5–3 hr on a 4-core Ryzen at cpu_throttle.percent=50.
+# Override with `mindxtrain train ... --cpu-percent N` if you want to
+# give it more or fewer cores.
+#
+# Verify after with: `mindxtrain eval-checkpoint <this config>` →
+# the trained adapter should report `adapter_loss < base_loss` on
+# the held-out dream slice.
+meta:
+  project: mindx_self_training
+  run_name: mindx_fallback_qwen3_1_5b_cpu_real
+  seed: 2048
+  license: apache-2.0
+  description: >-
+    Full CPU fine-tune of SmolLM2-135M on the mindX dream + evolution
+    corpus. Produces the local-fallback adapter mindX will swap in via
+    PATCH /v1/config/fallback-model when --register-as-fallback is set.
+
+hardware:
+  name: mi300x
+  gfx_arch: gfx942
+  gpus: 0
+  expected_hbm_gb: 192
+
+autotune:
+  enabled: false
+  budget_seconds: 60
+  policy: aot_only
+
+model:
+  name: HuggingFaceTB/SmolLM2-135M
+  attn_implementation: eager
+  torch_dtype: float32
+  trust_remote_code: false
+
+data:
+  source: mindx_dreams
+  path: /home/hacker/mindX/data/memory
+  # 512 samples × seq_len 512 with packing = ~64 packed sequences; 2
+  # epochs at effective batch 8 ≈ 16 optimizer steps. Plenty for the
+  # adapter to learn the dream distribution; tractable on a 6 GB Ryzen.
+  max_samples: 512
+  seq_len: 512
+  packing: true
+  # Hold out 10% (~50 examples) for validation. The trl_cpu backend
+  # splits deterministically by meta.seed and emits eval_loss every
+  # max_steps//4 steps so the Coach loss chart shows train + eval.
+  eval_split: 0.1
+  # Also pull *_evolutions.jsonl from mindX phase 5c, not just the
+  # phase-5b consolidation rows — gives the model both flavours of
+  # mindX output to learn from.
+  include_evolutions: true
+
+train:
+  backend: trl_cpu
+  logging_steps: 1
+  method:
+    kind: lora
+    # Bigger rank than smoke (r=8) so the adapter has capacity to
+    # actually capture dream phrasing patterns. Still small enough to
+    # fit in RAM with float32 activations.
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  optimizer:
+    name: adamw_torch
+    lr: 1.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 2
+  batch:
+    # Effective batch = per_device * grad_accum = 8. Keeps per-step
+    # RAM low (one sample at a time forward/back) while still giving
+    # the optimizer a reasonable batch-averaged gradient.
+    per_device: 1
+    grad_accum: 8
+  precision: float32
+  gradient_checkpointing: false
+  flash_attention:
+    backend: ck
+  fsdp:
+    enabled: false
+  cpu_throttle:
+    # Half the host's cores by default. Bigger than smoke's 50 because
+    # the real run is the one the user wants to throw cycles at.
+    # Override at runtime with `--cpu-percent N`.
+    percent: 50
+    nice_level: 10
+    omp_proc_bind: true
+  env:
+    PYTORCH_ROCM_ARCH: "gfx942"
+    HSA_NO_SCRATCH_RECLAIM: "1"
+    HIP_FORCE_DEV_KERNARG: "1"
+
+eval:
+  harness:
+    tasks: [mmlu]
+    fewshot: 0
+  regression:
+    baseline: ""
+    threshold_pct: -100.0
+
+quantize:
+  enabled: false
+  scheme: none
+  ptpc: false
+
+serve:
+  backend: vllm-rocm
+  reasoning_parser: none
+  tool_call_parser: none
+  tensor_parallel: 1
+  max_model_len: 2048
+  port: 8000
+
+publish:
+  enabled: false
+
+receipt:
+  output: ./out/receipt.json
+  include:
+    - yaml_hash
+    - dataset_cids

@@ -189,6 +189,89 @@ def eval_(
     console.print_json(data=parse_summary(results))
 
 
+@app.command(name="eval-checkpoint")
+def eval_checkpoint(
+    config: Path = typer.Argument(...),
+    checkpoint: Path = typer.Option(
+        None, "--checkpoint", "-c",
+        help="LoRA adapter dir; default = ./out/runs/<run_name>/checkpoint",
+    ),
+    jsonl: Path = typer.Option(
+        None, "--jsonl",
+        help=(
+            "Path to a *_training.jsonl held-out file. Defaults to picking "
+            "the newest one under `data.path/ltm/**/*_training.jsonl` "
+            "(works for source='mindx_dreams')."
+        ),
+    ),
+    max_samples: int = typer.Option(
+        32, "--max-samples", "-n",
+        help="Cap on how many rows to evaluate. Held-out CE is averaged.",
+    ),
+) -> None:
+    """Compare base-model vs base+adapter cross-entropy on held-out chat rows.
+
+    The training trainer_state.json gives a train-loss curve but doesn't
+    answer whether the adapter generalises — this verb does. Prints
+    `{base_loss, adapter_loss, delta}` where `delta < 0` means the
+    adapter is actually moving the model toward the held-out dreams.
+
+    The default jsonl picker walks the recipe's `data.path` for the
+    newest `*_training.jsonl` — for mindX dreams this is the corpus the
+    recipe trained on. For a rigorous held-out check, point `--jsonl` at
+    a file the training run never saw.
+    """
+    from mindxtrain.eval.held_out_loss import score_checkpoint
+
+    cfg = load_config(config)
+    ckpt = checkpoint or Path("./out/runs") / cfg.meta.run_name / "checkpoint"
+    if not ckpt.exists():
+        console.print(f"[red]adapter dir not found:[/red] {ckpt}")
+        raise typer.Exit(code=1)
+
+    jsonl_path = jsonl
+    if jsonl_path is None:
+        if cfg.data.source != "mindx_dreams" or cfg.data.path is None:
+            console.print(
+                "[red]--jsonl required when data.source != mindx_dreams "
+                "(no default picker for non-dream sources).",
+            )
+            raise typer.Exit(code=2)
+        candidates = sorted(
+            Path(cfg.data.path).glob("ltm/**/*_training.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            console.print(f"[red]no *_training.jsonl under {cfg.data.path}/ltm")
+            raise typer.Exit(code=2)
+        jsonl_path = candidates[0]
+        console.print(f"[dim]using newest dream file: {jsonl_path}[/dim]")
+
+    try:
+        score = score_checkpoint(
+            adapter_dir=ckpt,
+            base_model=cfg.model.name,
+            jsonl_path=jsonl_path,
+            max_samples=max_samples,
+            sink=lambda line: console.print(line),
+        )
+    except (ImportError, ValueError) as exc:
+        console.print(f"[red]eval-checkpoint failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    verdict = (
+        "[green]adapter improved[/green]" if score.delta < 0
+        else "[yellow]adapter regressed[/yellow]"
+    )
+    console.print(
+        f"\n{verdict} on {score.n} held-out rows: "
+        f"base={score.base_loss:.4f} adapter={score.adapter_loss:.4f} "
+        f"delta={score.delta:+.4f}",
+    )
+    console.print_json(data=score.as_dict())
+
+
 @app.command()
 def quantize(
     config: Path = typer.Argument(...),
@@ -229,6 +312,22 @@ def serve(
         None, "--ollama-bin",
         help="Override the ollama binary path (defaults to PATH lookup).",
     ),
+    register_as_fallback: bool = typer.Option(
+        False, "--register-as-fallback",
+        help=(
+            "After --to ollama succeeds, PATCH the new tag into mindX as "
+            "the local-fallback model (PATCH /v1/config/fallback-model). "
+            "Best-effort — a failure logs but does NOT fail the push."
+        ),
+    ),
+    mindx_base_url: str = typer.Option(
+        None, "--mindx-base-url",
+        help=(
+            "Override the mindX base URL for --register-as-fallback. "
+            "Defaults to MINDXTRAIN_API_BASE_URL env or "
+            "https://mindx.pythai.net."
+        ),
+    ),
 ) -> None:
     """Serve the trained checkpoint locally.
 
@@ -260,6 +359,8 @@ def serve(
                 tag=resolved_tag,
                 sink=lambda line: console.print(line),
                 ollama_bin=ollama_bin,
+                register_with_mindx=register_as_fallback,
+                mindx_base_url=mindx_base_url,
             )
         except (FileNotFoundError, ImportError) as exc:
             console.print(f"[red]push-to-ollama failed:[/red] {exc}")
@@ -268,6 +369,12 @@ def serve(
             f"[green]pushed:[/green] {result.tag} "
             f"(merged: {result.merged_dir}, Modelfile: {result.modelfile})",
         )
+        if result.mindx_fallback_swap:
+            console.print(
+                f"[green]mindX fallback swapped:[/green] "
+                f"{result.mindx_fallback_swap.get('previous', '?')} -> "
+                f"{result.mindx_fallback_swap.get('current', '?')}",
+            )
         return
 
     if to != "vllm":

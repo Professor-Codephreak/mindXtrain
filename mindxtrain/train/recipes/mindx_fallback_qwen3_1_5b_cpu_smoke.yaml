@@ -47,6 +47,9 @@ data:
 
 train:
   backend: trl_cpu
+  # Log every step so the smoke run produces a real (small) loss curve
+  # instead of trainer_state.json -> log_history: [].
+  logging_steps: 1
   method:
     kind: lora
     r: 8

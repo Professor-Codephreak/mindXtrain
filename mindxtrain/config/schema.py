@@ -173,6 +173,19 @@ class DataCfg(BaseModel):
             "max_samples caps the combined total."
         ),
     )
+    eval_split: float | None = Field(
+        default=None,
+        ge=0.05,
+        le=0.5,
+        description=(
+            "Fraction of the tokenised dataset to hold out for validation. "
+            "When set, the trl_cpu lane passes the held-out slice as "
+            "`eval_dataset` to SFTTrainer and emits eval_loss every "
+            "max_steps//4 steps so the Coach loss chart can plot a "
+            "second series. None disables eval entirely (default — keeps "
+            "the legacy single-loss behaviour)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_source_inputs(self) -> DataCfg:
@@ -381,6 +394,20 @@ class TrainCfg(BaseModel):
     flash_attention: FlashAttentionCfg = Field(default_factory=FlashAttentionCfg)
     fsdp: FsdpCfg = Field(default_factory=FsdpCfg)
     cpu_throttle: CPUThrottleCfg = Field(default_factory=CPUThrottleCfg)
+    logging_steps: int = Field(
+        default=1,
+        ge=1,
+        le=10_000,
+        description=(
+            "How often (in optimizer steps) HF Trainer should call its "
+            "on_log hooks. Default 1 — every step logs, giving the Coach "
+            "loss chart a per-step trajectory and trainer_state.json a "
+            "full log_history. The trl_cpu backend floors this at "
+            "max(1, min(logging_steps, max_steps // 4)) so short runs "
+            "still get at least 4 data points even if the YAML sets a "
+            "higher cadence."
+        ),
+    )
     env: dict[str, str] = Field(
         default_factory=lambda: {
             "HSA_NO_SCRATCH_RECLAIM": "1",
