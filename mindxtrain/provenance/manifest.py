@@ -59,6 +59,25 @@ class OnChainPointers(BaseModel):
     erc8004_attestation: str = Field(default="", description="tx hash of ERC-8004 attestation")
 
 
+class TimeAttestation(BaseModel):
+    """chronos.agent promised-time stamp.
+
+    Populated when chronos.agent's /v1/oracle/time is reachable at
+    manifest-emit time. Otherwise `attested=False` and the unix/utc
+    fields fall back to local clock readings — the receipt is still
+    valid, just not network-promised.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    attested: bool = False
+    unix_18dp: str = ""
+    utc: str = ""
+    consensus: str = "offline"          # correlated | degraded | drifted | offline | unavailable
+    confidence_ms: float = 0.0
+    anchor_count_24h: int = 0
+    promised_by: str = ""
+
+
 class Manifest(BaseModel):
     """Trained-model artifact manifest."""
 
@@ -89,6 +108,10 @@ class Manifest(BaseModel):
     # earned by the §8 thresholds.
     promotion_bypassed: bool = False
     promotion_bypass_reasons: list[str] = Field(default_factory=list)
+
+    # Promised time from chronos.agent when reachable; falls back to
+    # local clock + attested=False otherwise.
+    time_attestation: TimeAttestation = Field(default_factory=TimeAttestation)
 
 
 def emit_receipt(
@@ -121,4 +144,44 @@ def emit_receipt(
         gfx_arch=cfg.hardware.gfx_arch,  # type: ignore[attr-defined]
         git_sha=git_sha,
         blake3=hashes,
+        time_attestation=_fetch_time_attestation(),
+    )
+
+
+def _fetch_time_attestation() -> TimeAttestation:
+    """Best-effort sync call to chronos.agent's /v1/oracle/time.
+
+    Returns a populated TimeAttestation when mindX is reachable
+    (consensus in {correlated, degraded, drifted}); otherwise an
+    `attested=False` placeholder so the manifest schema always
+    validates and reviewers can tell at a glance whether promotion was
+    network-promised time.
+    """
+    import os
+    try:
+        import httpx
+    except ImportError:
+        return TimeAttestation()
+
+    base = os.environ.get("MINDX_BASE_URL", "http://localhost:8000").rstrip("/")
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get(f"{base}/v1/oracle/time")
+            resp.raise_for_status()
+            body = resp.json()
+    except (httpx.HTTPError, OSError, ValueError):
+        return TimeAttestation()
+
+    consensus = body.get("consensus", "offline")
+    # Only mark `attested=True` when the upstream reported a real
+    # consensus tier — "unavailable" or "offline" stay attested=False.
+    attested = consensus in {"correlated", "degraded", "drifted"}
+    return TimeAttestation(
+        attested=attested,
+        unix_18dp=body.get("unix_18dp", ""),
+        utc=body.get("utc", ""),
+        consensus=consensus,
+        confidence_ms=float(body.get("confidence_ms") or 0.0),
+        anchor_count_24h=int(body.get("anchor_count_24h") or 0),
+        promised_by=body.get("promised_by", ""),
     )

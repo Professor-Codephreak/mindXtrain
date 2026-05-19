@@ -1040,6 +1040,48 @@ async def api_diagnostics_live() -> dict[str, Any]:
     return probe_live_metrics().model_dump()
 
 
+@router.get("/api/diagnostics/chronos")
+async def api_diagnostics_chronos() -> dict[str, Any]:
+    """Aggregate chronos.agent state for the UI's promised-time card.
+
+    Calls mindX's `/v1/oracle/{time,anchors,drift}` and merges the
+    responses into one payload. Degrades to `consensus: unavailable`
+    when mindX is unreachable so the UI never blanks out.
+    """
+    from mindxtrain.operator.coach import chronos_client
+
+    promised = await chronos_client.now()
+    anchors_resp = await chronos_client.anchors(limit=100)
+    drift_resp = await chronos_client.drift(hours=24)
+    return {
+        "promised_time": promised,
+        "anchors": anchors_resp.get("anchors", []),
+        "anchor_count": anchors_resp.get("n", 0),
+        "drift_history": drift_resp,
+    }
+
+
+@router.get("/api/diagnostics/measurement-confidence")
+async def api_diagnostics_measurement_confidence() -> dict[str, Any]:
+    """psutil vs `ps -A` cross-check — flags container/cgroup bias.
+
+    `confidence_band` is the headline: `tight` < 5pp / 100 MB,
+    `loose` < 15pp / 500 MB, `divergent` otherwise, `unknown` when
+    either source isn't available.
+    """
+    from mindxtrain.operator.coach.cli_diagnostics import measurement_confidence
+
+    return measurement_confidence()
+
+
+@router.get("/api/diagnostics/cli-samplers")
+async def api_diagnostics_cli_samplers() -> dict[str, Any]:
+    """All six Linux terminal samplers in one shot."""
+    from mindxtrain.operator.coach.cli_diagnostics import run_samplers
+
+    return run_samplers()
+
+
 @router.get("/api/diagnostics/runs", response_model=list[_runs.Run])
 async def api_diagnostics_runs() -> list[_runs.Run]:
     """Snapshot of every run the registry currently knows about.

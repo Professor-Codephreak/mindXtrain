@@ -72,6 +72,45 @@
       </div>
     </section>
 
+    <section id="step-chronos" class="card" data-step-id="step-chronos">
+      <header>
+        <h2><span class="step chronos-step">⏱</span> Promised time (mindX chronos)</h2>
+        <span class="hint" id="chronos-summary">probing&hellip;</span>
+      </header>
+      <p class="prose">
+        Every mindX artefact — training manifest, MEI receipt, evolution
+        proposal — is stamped with chronos.agent's <em>promised time</em>:
+        a UTC moment plus a measured confidence interval. The interval
+        comes from the standard deviation of recent transaction
+        anchors (the chain confirmed our event at T<sub>block</sub>
+        while our local clock saw T<sub>local</sub>). When the spread
+        widens, the consensus tier drops from <code>correlated</code>
+        to <code>degraded</code> to <code>drifted</code>.
+      </p>
+      <div id="chronos-body" class="chronos-body">
+        <div class="chronos-headline">
+          <span id="chronos-utc" class="mono">&mdash;</span>
+          <span id="chronos-consensus" class="badge-status">probing</span>
+          <span id="chronos-confidence" class="hint">&pm; ? ms</span>
+        </div>
+        <div class="chronos-charts">
+          <div class="chronos-chart-wrap">
+            <h3>drift over 24h <span class="hint">(d3 sparkline)</span></h3>
+            <svg id="chronos-drift" width="320" height="60"></svg>
+          </div>
+          <div class="chronos-chart-wrap">
+            <h3>anchor density <span class="hint">(per hour)</span></h3>
+            <svg id="chronos-density" width="320" height="60"></svg>
+          </div>
+        </div>
+        <div class="chronos-confidence-row">
+          <span class="hint">measurement confidence:</span>
+          <span id="chronos-mc" class="badge-status">unknown</span>
+          <span id="chronos-mc-detail" class="hint mono"></span>
+        </div>
+      </div>
+    </section>
+
     <section id="step-hardware" class="card" data-step-id="step-hardware">
       <header>
         <h2><span class="step">2</span> Hardware available</h2>
@@ -350,6 +389,7 @@
   </footer>
 
   <script src="/coach/static/vendor/chart.umd.min.js"></script>
+  <script src="/coach/static/vendor/d3.v7.min.js"></script>
   <script src="/coach/static/coach.js"></script>
 </body>
 </html>

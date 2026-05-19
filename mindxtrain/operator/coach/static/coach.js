@@ -1468,4 +1468,149 @@ window.addEventListener("DOMContentLoaded", () => {
   refreshMEIHistory();
   runHardware();
   runPreflight();
+  refreshChronos();
+  _startChronosPolling();
 });
+
+
+// --- chronos card --------------------------------------------------------
+
+async function refreshChronos() {
+  const summary = document.getElementById("chronos-summary");
+  let body;
+  try {
+    body = await getJSON("/coach/api/diagnostics/chronos");
+  } catch (e) {
+    if (summary) summary.textContent = `probe failed: ${e}`;
+    _renderChronosHeadline({ consensus: "unavailable", utc: "", confidence_ms: 0 });
+    return;
+  }
+  const pt = body.promised_time || {};
+  _renderChronosHeadline(pt);
+  if (summary) {
+    const anchors = body.anchor_count != null ? `${body.anchor_count} anchors` : "no anchors";
+    summary.textContent = `${pt.consensus || "?"} · ${anchors}`;
+  }
+  // Drift sparkline + density bars (d3) — degrades to no-op when d3 absent.
+  if (typeof d3 !== "undefined") {
+    _renderChronosDrift(body.drift_history || { buckets: [] });
+    _renderChronosDensity(body.anchors || []);
+  }
+  // Measurement-confidence cross-check.
+  try {
+    const mc = await getJSON("/coach/api/diagnostics/measurement-confidence");
+    _renderMeasurementConfidence(mc);
+  } catch (e) {
+    /* graceful: chip stays "unknown" */
+  }
+}
+
+function _renderChronosHeadline(pt) {
+  const utcEl = document.getElementById("chronos-utc");
+  const consEl = document.getElementById("chronos-consensus");
+  const confEl = document.getElementById("chronos-confidence");
+  if (utcEl) utcEl.textContent = pt.utc || "—";
+  if (consEl) {
+    consEl.textContent = pt.consensus || "unknown";
+    consEl.className = `badge-status tier-${pt.consensus || "unknown"}`;
+  }
+  if (confEl) {
+    const ms = typeof pt.confidence_ms === "number" ? pt.confidence_ms : null;
+    confEl.textContent = ms !== null ? `± ${ms.toFixed(1)} ms` : "± ? ms";
+  }
+}
+
+function _renderChronosDrift(hist) {
+  const svg = d3.select("#chronos-drift");
+  svg.selectAll("*").remove();
+  const buckets = hist.buckets || [];
+  const w = +svg.attr("width") || 320;
+  const h = +svg.attr("height") || 60;
+  const pad = 4;
+  if (buckets.length === 0) {
+    svg.append("text").attr("x", w / 2).attr("y", h / 2)
+      .attr("text-anchor", "middle").attr("fill", "#8b949e")
+      .style("font", "11px ui-monospace, monospace")
+      .text("no anchors in last 24h");
+    return;
+  }
+  const xs = d3.scaleLinear()
+    .domain([0, Math.max(1, buckets.length - 1)])
+    .range([pad, w - pad]);
+  const drifts = buckets.map(b => b.drift_mean_ms);
+  const yMin = Math.min(0, ...drifts);
+  const yMax = Math.max(0, ...drifts);
+  const ys = d3.scaleLinear()
+    .domain([yMin, yMax])
+    .range([h - pad, pad]);
+  // Zero line.
+  svg.append("line")
+    .attr("x1", pad).attr("x2", w - pad)
+    .attr("y1", ys(0)).attr("y2", ys(0))
+    .attr("stroke", "#30363d").attr("stroke-dasharray", "2 3");
+  // Drift line.
+  const line = d3.line()
+    .x((_, i) => xs(i)).y(d => ys(d.drift_mean_ms))
+    .curve(d3.curveMonotoneX);
+  svg.append("path")
+    .datum(buckets)
+    .attr("d", line)
+    .attr("fill", "none")
+    .attr("stroke", "#f7921e")
+    .attr("stroke-width", 1.5);
+  // Hover dots.
+  svg.selectAll("circle").data(buckets).enter()
+    .append("circle")
+    .attr("cx", (_, i) => xs(i))
+    .attr("cy", d => ys(d.drift_mean_ms))
+    .attr("r", 1.8)
+    .attr("fill", "#f7921e");
+}
+
+function _renderChronosDensity(anchors) {
+  const svg = d3.select("#chronos-density");
+  svg.selectAll("*").remove();
+  const w = +svg.attr("width") || 320;
+  const h = +svg.attr("height") || 60;
+  const pad = 4;
+  // Bucket anchors by hour (epoch-hour). Last 24 buckets.
+  const nowH = Math.floor(Date.now() / 3600000);
+  const counts = new Array(24).fill(0);
+  for (const a of anchors) {
+    const tsMs = (a.captured_at_ns || 0) / 1e6;
+    if (!tsMs) continue;
+    const hr = Math.floor(tsMs / 3600000);
+    const offset = nowH - hr;
+    if (offset >= 0 && offset < 24) counts[23 - offset] += 1;
+  }
+  const maxC = Math.max(1, ...counts);
+  const barW = (w - pad * 2) / 24;
+  svg.selectAll("rect").data(counts).enter()
+    .append("rect")
+    .attr("x", (_, i) => pad + i * barW)
+    .attr("y", c => h - pad - (h - 2 * pad) * (c / maxC))
+    .attr("width", Math.max(1, barW - 1))
+    .attr("height", c => (h - 2 * pad) * (c / maxC))
+    .attr("fill", "#2f81f7");
+}
+
+function _renderMeasurementConfidence(mc) {
+  const chip = document.getElementById("chronos-mc");
+  const detail = document.getElementById("chronos-mc-detail");
+  if (!chip) return;
+  const band = mc.confidence_band || "unknown";
+  chip.textContent = band;
+  chip.className = `badge-status tier-${band}`;
+  if (detail && mc.ok) {
+    detail.textContent =
+      `Δcpu=${mc.cpu_delta_pp}pp Δrss=${mc.rss_delta_mb}MB ` +
+      `(psutil cpu=${mc.psutil_cpu_pct}% ps cpu=${mc.ps_cpu_pct}%)`;
+  } else if (detail) {
+    detail.textContent = "";
+  }
+}
+
+function _startChronosPolling() {
+  // 5s refresh — UI feels live without thrashing the mindX backend.
+  setInterval(() => { refreshChronos(); }, 5000);
+}

@@ -179,6 +179,59 @@ textarea { width: 100%; resize: vertical; }
   border-color: var(--accent);
   background: rgba(247, 146, 30, 0.05);
 }
+.chronos-step { background: var(--accent-2); color: #fff; font-size: 0.95rem; }
+.chronos-headline {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.1rem;
+  margin: 0.5rem 0 1rem;
+}
+.chronos-headline .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem;
+}
+.chronos-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 0.75rem 0;
+}
+.chronos-chart-wrap h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.chronos-chart-wrap svg {
+  display: block;
+  width: 100%;
+  max-width: 320px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.chronos-confidence-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+/* Consensus tier colors — reused for the headline pill */
+.badge-status.tier-correlated, .badge-status.tier-tight {
+  background: rgba(46, 160, 67, 0.18); color: var(--ok);
+}
+.badge-status.tier-degraded, .badge-status.tier-loose {
+  background: rgba(210, 153, 34, 0.18); color: var(--warn);
+}
+.badge-status.tier-drifted, .badge-status.tier-divergent,
+.badge-status.tier-unavailable, .badge-status.tier-offline {
+  background: rgba(248, 81, 73, 0.18); color: var(--bad);
+}
+.badge-status.tier-unknown { background: var(--border); color: var(--muted); }
+
 .backend-badge {
   display: inline-flex;
   align-items: center;
