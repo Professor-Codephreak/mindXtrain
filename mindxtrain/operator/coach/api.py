@@ -17,9 +17,11 @@ synthetic Runs with reserved recipe names (`_github_push`,
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
@@ -601,17 +603,94 @@ def autostart_recipe() -> str:
     )
 
 
-async def autostart_cpu_training() -> _runs.Run | None:
-    """Launch a CPU training run at operator boot — no button push required.
+def _mindx_root() -> Path:
+    """Filesystem root of the mindX install (MINDXTRAIN_MINDX_ROOT, else ~/mindX)."""
+    explicit = os.environ.get("MINDXTRAIN_MINDX_ROOT", "").strip()
+    return Path(explicit) if explicit else Path.home() / "mindX"
 
-    Gated on `MINDXTRAIN_AUTOSTART` so a `TestClient` / CI lifespan never
-    spawns a trainer. The recipe defaults to the safe ~90s smoke recipe;
-    override with `MINDXTRAIN_AUTOSTART_RECIPE`. Idempotent — skips when a
-    run is already pending/running so a uvicorn `--reload` can't stack
-    trainers. Returns the launched `Run`, or `None` when autostart is off,
-    a run is already live, or the launch failed (logged, never raised).
+
+def sea_decision_path() -> Path:
+    """Path to the SEA agent's training-recommendation file.
+
+    The mindX StrategicEvolutionAgent writes its go/no-go verdict here;
+    the operator reads it to gate autonomous training. Override with
+    `MINDXTRAIN_SEA_DECISION`, else default under the mindX data dir.
+    """
+    explicit = os.environ.get("MINDXTRAIN_SEA_DECISION", "").strip()
+    if explicit:
+        return Path(explicit)
+    return _mindx_root() / "data" / "training_recommendation.json"
+
+
+def read_sea_decision() -> dict[str, Any] | None:
+    """Parse the SEA decision file. `None` when absent or unreadable/invalid."""
+    try:
+        raw = sea_decision_path().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def sea_training_gate() -> dict[str, Any]:
+    """Evaluate the SEA agent's training recommendation.
+
+    Returns a status dict consumed by both the autostart path and the
+    `/api/sea-decision` endpoint. `open` is True only when SEA explicitly
+    recommends training *and* the record is still fresh (within `ttl_s`).
+    A missing file means SEA has not spoken — the gate stays closed.
+    """
+    data = read_sea_decision()
+    if data is None:
+        return {
+            "open": False, "available": False, "decision": None,
+            "reason": "no SEA decision file — autonomous training stands down",
+        }
+    reason = str(data.get("reason", "")).strip() or "no reason given"
+    if not bool(data.get("recommend", False)):
+        return {
+            "open": False, "available": True, "decision": data,
+            "reason": f"SEA decided against training: {reason}",
+        }
+    ts = data.get("ts")
+    ttl = data.get("ttl_s", 3600)
+    if isinstance(ts, (int, float)) and isinstance(ttl, (int, float)):
+        age = time.time() - float(ts)
+        if age > float(ttl):
+            return {
+                "open": False, "available": True, "decision": data,
+                "reason": (
+                    f"SEA recommendation is stale "
+                    f"({age:.0f}s old > ttl {float(ttl):.0f}s)"
+                ),
+            }
+    return {
+        "open": True, "available": True, "decision": data,
+        "reason": f"SEA recommends training — {reason}",
+    }
+
+
+async def autostart_cpu_training() -> _runs.Run | None:
+    """Launch a CPU training run at boot — autonomous, but only if SEA agrees.
+
+    Two gates. `MINDXTRAIN_AUTOSTART` arms autonomous mode (off by
+    default so a `TestClient` / CI lifespan never spawns a trainer). The
+    mindX `StrategicEvolutionAgent`'s decision file is the actual
+    decider — the run launches only when SEA recommends training and the
+    record is fresh. SEA's chosen recipe (if any) wins; otherwise the
+    `MINDXTRAIN_AUTOSTART_RECIPE` default applies. Idempotent — skips
+    when a run is already pending/running. Returns the launched `Run`,
+    or `None` when a gate is closed / the launch failed (logged, never
+    raised).
     """
     if not autostart_enabled():
+        return None
+    gate = sea_training_gate()
+    if not gate["open"]:
+        _log.info("autostart: SEA gate closed — %s", gate["reason"])
         return None
     for existing in _REGISTRY.list_runs():
         if existing.status in ("pending", "running"):
@@ -620,19 +699,35 @@ async def autostart_cpu_training() -> _runs.Run | None:
                 existing.id, existing.status,
             )
             return None
-    recipe = autostart_recipe()
-    _log.info("autostart: launching hands-free CPU training recipe %r", recipe)
+    decision = gate["decision"] or {}
+    recipe = str(decision.get("recipe") or "").strip() or autostart_recipe()
+    _log.info("autostart: SEA gate OPEN — %s; launching %r", gate["reason"], recipe)
     try:
         run = await api_runs_launch(LaunchRequest(recipe=recipe))
     except HTTPException as exc:
         _log.warning(
             "autostart: launch failed (HTTP %s) — %s. The Coach UI stays "
-            "available; press 'Run training' once the cause is resolved.",
+            "available; press 'Run training' to start a session manually.",
             exc.status_code, exc.detail,
         )
         return None
-    _log.info("autostart: run %s launched — Coach UI will discover it", run.id)
+    _log.info("autostart: run %s launched on SEA's recommendation", run.id)
     return run
+
+
+@router.get("/api/sea-decision")
+async def api_sea_decision() -> dict[str, Any]:
+    """The SEA agent's current training recommendation + the gate verdict.
+
+    The Coach UI polls this so the user can see whether autonomous
+    training is armed and why SEA did (or did not) recommend a run.
+    `open` True means a boot right now would auto-launch; the user can
+    always start a session by hand with the "Run training" button.
+    """
+    gate = sea_training_gate()
+    gate["autostart_enabled"] = autostart_enabled()
+    gate["decision_path"] = str(sea_decision_path())
+    return gate
 
 
 @router.get("/api/runs", response_model=list[_runs.Run])

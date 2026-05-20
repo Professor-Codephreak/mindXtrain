@@ -849,6 +849,40 @@ async function discoverActiveRun() {
   }
 }
 
+async function refreshSEADecision() {
+  // Surface the mindX SEA agent's go/no-go on autonomous training. The
+  // operator only auto-launches a run when this gate is open; the user
+  // can always start one by hand with the Run training button.
+  const wrap = $("#sea-status");
+  const pill = $("#sea-status-pill");
+  const text = $("#sea-status-text");
+  if (!wrap || !pill || !text) return;
+  try {
+    const d = await getJSON("/coach/api/sea-decision");
+    wrap.hidden = false;
+    if (!d.autostart_enabled) {
+      pill.className = "badge-status tier-unknown";
+      pill.textContent = "SEA";
+      text.textContent =
+        "Autonomous mode off — start a session with Run training below.";
+      return;
+    }
+    if (d.open) {
+      pill.className = "badge-status tier-correlated";
+      pill.textContent = "SEA · go";
+    } else {
+      pill.className = "badge-status tier-drifted";
+      pill.textContent = "SEA · hold";
+    }
+    text.textContent = d.reason || "";
+  } catch (_e) {
+    wrap.hidden = false;
+    pill.className = "badge-status tier-unknown";
+    pill.textContent = "SEA";
+    text.textContent = "SEA decision unavailable.";
+  }
+}
+
 async function cancelTrain() {
   if (!state.run) return;
   $("#cancel-train").disabled = true;
@@ -1523,6 +1557,10 @@ window.addEventListener("DOMContentLoaded", () => {
   // Hands-free: attach to any run the operator autostarted at boot so
   // the Train card is live without a button push.
   discoverActiveRun();
+  // SEA gate — show the mindX agent's autonomous-training verdict and
+  // re-poll every 30s so a fresh decision file flips the banner live.
+  refreshSEADecision();
+  setInterval(refreshSEADecision, 30000);
 });
 
 

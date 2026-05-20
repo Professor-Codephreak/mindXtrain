@@ -180,6 +180,19 @@ textarea { width: 100%; resize: vertical; }
   background: rgba(247, 146, 30, 0.05);
 }
 /* Training session — tiered metrics panel inside #step-train */
+.sea-status {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-size: 0.85rem;
+}
+.sea-status .hint { text-transform: none; letter-spacing: 0; }
+
 .session-headline {
   display: flex;
   align-items: center;
