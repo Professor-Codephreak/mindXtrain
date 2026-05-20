@@ -222,6 +222,13 @@
         <span class="hint">eval</span>
         <span id="session-eval" class="mono">&mdash;</span>
       </div>
+      <p id="train-phase" class="train-phase" hidden>Waiting to start&hellip;</p>
+      <div id="train-progress" class="train-progress" hidden>
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <span id="progress-label" class="mono hint">step 0 / ? &middot; 0% &middot; ETA --:--</span>
+      </div>
       <details id="session-metrics" hidden open>
         <summary>system metrics <span class="hint">(1 Hz &middot; psutil + /proc &middot; d3)</span></summary>
         <div class="metrics-grid">
@@ -260,10 +267,14 @@
           </p>
         </div>
         <table id="metrics-table">
-          <thead><tr><th>step</th><th>loss</th><th>lr</th><th>grad_norm</th></tr></thead>
+          <thead><tr>
+            <th>step</th><th>loss</th><th>acc</th>
+            <th>entropy</th><th>lr</th><th>grad_norm</th>
+          </tr></thead>
           <tbody></tbody>
         </table>
       </div>
+      <div id="train-result" class="train-result" hidden></div>
       <details id="train-log-wrap" hidden>
         <summary>train.log (live tail)</summary>
         <pre id="train-log" class="code log-tail"></pre>

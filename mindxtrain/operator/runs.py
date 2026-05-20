@@ -68,6 +68,11 @@ class StepEvent(_Event):
     lr: float | None = None
     grad_norm: float | None = None
     tokens_per_s: float | None = None
+    # Optional realtime-feedback fields. Populated by the trl_cpu HF
+    # callback; other backends leave them None (back-compatible).
+    total_steps: int | None = None           # HF TrainerState.max_steps
+    mean_token_accuracy: float | None = None  # "is it learning" signal
+    entropy: float | None = None              # per-step token entropy
 
 
 class EvalEvent(_Event):

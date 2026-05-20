@@ -116,6 +116,38 @@ def test_events_stream_emits_step_events() -> None:
     assert frames[-1]["data"]["status"] == "succeeded"
 
 
+def test_step_event_realtime_feedback_fields() -> None:
+    """StepEvent carries optional total_steps / accuracy / entropy fields.
+
+    These drive the Coach progress bar + "is it learning" chart. They
+    must round-trip the SSE encoding, and a StepEvent omitting them must
+    still validate (back-compat for non-trl backends).
+    """
+    rich = _runs.StepEvent(
+        run_id="r1", step=5, loss=2.1, lr=1e-4, grad_norm=0.3,
+        total_steps=8, mean_token_accuracy=0.52, entropy=2.2,
+    )
+    frame = _runs.format_sse(rich)
+    parsed = _parse_sse(frame)[0]
+    assert parsed["event"] == "step"
+    restored = _TRAIN_EVENT.validate_python(parsed["data"])
+    assert isinstance(restored, _runs.StepEvent)
+    assert restored.total_steps == 8
+    assert restored.mean_token_accuracy == 0.52
+    assert restored.entropy == 2.2
+
+    # A StepEvent without the new fields still validates — the fields
+    # default to None so existing backends are unaffected.
+    bare = _runs.StepEvent(run_id="r1", step=1, loss=3.0)
+    assert bare.total_steps is None
+    assert bare.mean_token_accuracy is None
+    assert bare.entropy is None
+    bare_restored = _TRAIN_EVENT.validate_python(
+        _parse_sse(_runs.format_sse(bare))[0]["data"],
+    )
+    assert isinstance(bare_restored, _runs.StepEvent)
+
+
 # ---- 3. ring-buffer replay on late subscribe -----------------------------
 
 

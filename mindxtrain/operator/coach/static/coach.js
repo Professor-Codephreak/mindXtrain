@@ -20,6 +20,10 @@ const state = {
   chatBackendModel: "",  // detected ollama/vllm model name (drives /v1/chat/completions body)
   metrics: [],         // rolling buffer of MetricsEvent samples (capped METRICS_BUFFER_CAP)
   metricsTimer: null,  // setInterval handle for elapsed-time counter
+  totalSteps: null,    // StepEvent.total_steps — drives the progress bar
+  firstStepTs: null,   // wall-clock ms at the first observed step (for ETA)
+  firstStep: 0,        // step number of that first observed step
+  stepBuffer: [],      // {step,loss,mean_token_accuracy} for the result banner
 };
 
 const METRICS_BUFFER_CAP = 300;
@@ -682,24 +686,54 @@ function ensureChart() {
   const ctx = $("#loss-chart").getContext("2d");
   state.chart = new Chart(ctx, {
     type: "line",
-    data: { labels: [], datasets: [{ label: "loss", data: [], borderWidth: 2, tension: 0.2 }] },
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: "loss", data: [], borderWidth: 2, tension: 0.2,
+          yAxisID: "y", borderColor: "#f7921e",
+        },
+        {
+          // mean_token_accuracy — "is it learning" signal. Non-trl
+          // backends omit it; NaN gaps render cleanly.
+          label: "accuracy", data: [], borderWidth: 2, tension: 0.2,
+          yAxisID: "yAcc", borderColor: "#2ea043", spanGaps: false,
+        },
+      ],
+    },
     options: {
       animation: false,
       responsive: true,
       scales: {
         x: { title: { display: true, text: "step" } },
-        y: { title: { display: true, text: "loss" }, beginAtZero: false },
+        y: {
+          position: "left",
+          title: { display: true, text: "loss" },
+          beginAtZero: false,
+        },
+        yAcc: {
+          position: "right",
+          min: 0, max: 1,
+          title: { display: true, text: "accuracy" },
+          grid: { drawOnChartArea: false },
+        },
       },
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: true } },
     },
   });
   return state.chart;
 }
 
 function pushPoint(ev) {
+  const acc = ev.mean_token_accuracy;
+  const ent = ev.entropy;
   const tbody = $("#metrics-table tbody");
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td>${ev.step}</td><td>${ev.loss.toFixed(4)}</td><td>${ev.lr ?? "&mdash;"}</td><td>${ev.grad_norm ?? "&mdash;"}</td>`;
+  tr.innerHTML =
+    `<td>${ev.step}</td><td>${ev.loss.toFixed(4)}</td>` +
+    `<td>${acc != null ? acc.toFixed(3) : "&mdash;"}</td>` +
+    `<td>${ent != null ? ent.toFixed(3) : "&mdash;"}</td>` +
+    `<td>${ev.lr ?? "&mdash;"}</td><td>${ev.grad_norm ?? "&mdash;"}</td>`;
   tbody.appendChild(tr);
   // Cap table to last 50 rows.
   while (tbody.children.length > 50) tbody.removeChild(tbody.firstChild);
@@ -707,12 +741,18 @@ function pushPoint(ev) {
   if (chart) {
     chart.data.labels.push(ev.step);
     chart.data.datasets[0].data.push(ev.loss);
+    // accuracy on the 2nd axis — NaN where the backend didn't report it.
+    chart.data.datasets[1].data.push(acc != null ? acc : NaN);
     chart.update("none");
   }
+  // Buffer for the terminal result banner.
+  state.stepBuffer.push({ step: ev.step, loss: ev.loss, mean_token_accuracy: acc });
+  _updateProgress(ev);
 }
 
 function appendLog(ev) {
   const pre = $("#train-log");
+  _narratePhase(ev.line);
   pre.appendChild(document.createTextNode(ev.line + "\n"));
   state.logLines += 1;
   if (state.logLines > MAX_LOG_LINES) {
@@ -752,7 +792,11 @@ function subscribeRun(runId) {
       _stopElapsedTimer();
       $("#cancel-train").hidden = true;
       $("#run-train").disabled = false;
+      _renderResultBanner(ev.status, ev.message);
+      _setPhase(ev.status === "succeeded" ? "Done" : "Failed");
       if (ev.status === "succeeded") {
+        const fill = $("#progress-fill");
+        if (fill) { fill.style.width = "100%"; fill.classList.add("done"); }
         markCardDone("step-train");
         // Reveal the push-to-ollama button — adapter is on disk and the
         // run registry knows about it. The user can pick a tag and merge
@@ -782,10 +826,19 @@ async function runTrain() {
   if (state.chart) {
     state.chart.data.labels = [];
     state.chart.data.datasets[0].data = [];
+    state.chart.data.datasets[1].data = [];
     state.chart.update("none");
   }
   // Reset the session-metrics tier for the new run.
   state.metrics = [];
+  // Reset the realtime-feedback surfaces for the new run.
+  state.totalSteps = null;
+  state.firstStepTs = null;
+  state.firstStep = 0;
+  state.stepBuffer = [];
+  _resetProgress();
+  const resultEl = $("#train-result");
+  if (resultEl) { resultEl.hidden = true; resultEl.textContent = ""; }
   _enableSessionMetrics();
   _renderSessionSparklines();
   setStatusBadge("launching");
@@ -813,6 +866,114 @@ async function runTrain() {
     appendLog({ line: `launch error: ${e}` });
     $("#run-train").disabled = false;
   }
+}
+
+// --- realtime training feedback: phase, progress, result ----------------
+//
+// Three surfaces that make a live CPU run legible: a plain-language
+// phase line, a step X/N progress bar with an ETA, and a terminal
+// outcome banner. Driven by the existing step/log/status SSE events.
+
+// Maps trl_cpu's well-prefixed log lines to friendly phase labels.
+const TRL_PHASES = [
+  ["materializing dataset", "Preparing dataset…"],
+  ["dataset size=", "Preparing dataset…"],
+  ["split:", "Splitting train / eval…"],
+  ["loading base model", "Loading base model…"],
+  ["est_max_steps=", "Planning training run…"],
+  ["starting trainer.train", "Training…"],
+  ["training complete", "Saving checkpoint…"],
+  ["checkpoint at", "Checkpoint written"],
+];
+
+function _setPhase(text) {
+  const el = $("#train-phase");
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = text;
+}
+
+function _narratePhase(line) {
+  // Surface a friendly phase from a raw trl_cpu log line, if it matches.
+  if (typeof line !== "string" || !line.includes("[trl_cpu]")) return;
+  for (const [needle, label] of TRL_PHASES) {
+    if (line.includes(needle)) { _setPhase(label); return; }
+  }
+}
+
+function _resetProgress() {
+  const fill = $("#progress-fill");
+  if (fill) { fill.style.width = "0%"; fill.classList.remove("done"); }
+  const label = $("#progress-label");
+  if (label) label.textContent = "step 0 / ? · 0% · ETA --:--";
+  const wrap = $("#train-progress");
+  if (wrap) wrap.hidden = false;
+  _setPhase("Waiting to start…");
+}
+
+function _updateProgress(ev) {
+  // Called per StepEvent. Fills the bar, computes an ETA from the
+  // observed per-step cadence, and narrates the live step count.
+  if (ev.total_steps) state.totalSteps = ev.total_steps;
+  const wrap = $("#train-progress");
+  if (wrap) wrap.hidden = false;
+  if (state.firstStepTs == null) {
+    state.firstStepTs = Date.now();
+    state.firstStep = ev.step;
+  }
+  const total = state.totalSteps;
+  const pct = total ? Math.min(100, Math.round((ev.step / total) * 100)) : 0;
+  const fill = $("#progress-fill");
+  if (fill && total) fill.style.width = pct + "%";
+  let eta = "--:--";
+  const stepsDone = ev.step - state.firstStep;
+  if (total && stepsDone > 0) {
+    const perStepMs = (Date.now() - state.firstStepTs) / stepsDone;
+    const remainS = Math.max(0, Math.round((perStepMs * (total - ev.step)) / 1000));
+    eta = _formatHMS(remainS).slice(3);  // HH:MM:SS → MM:SS
+  }
+  const label = $("#progress-label");
+  if (label) {
+    label.textContent = total
+      ? `step ${ev.step} / ${total} · ${pct}% · ETA ${eta}`
+      : `step ${ev.step} · ETA --:--`;
+  }
+  _setPhase(total
+    ? `Training — step ${ev.step} of ${total}`
+    : `Training — step ${ev.step}`);
+}
+
+function _renderResultBanner(status, message) {
+  // Terminal outcome — assembled from the buffered step data so the
+  // user reads the result without parsing the raw log.
+  const el = $("#train-result");
+  if (!el) return;
+  const buf = state.stepBuffer || [];
+  const first = buf[0];
+  const last = buf[buf.length - 1];
+  let elapsed = "—";
+  if (state.run && state.run.created_at) {
+    const ms = Date.now() - Date.parse(state.run.created_at);
+    if (!Number.isNaN(ms)) elapsed = _formatHMS(Math.floor(ms / 1000));
+  }
+  const parts = [];
+  if (status === "succeeded") {
+    el.className = "train-result";
+    parts.push(`✓ ${buf.length} step${buf.length === 1 ? "" : "s"}`, elapsed);
+    if (first && last) {
+      parts.push(`loss ${first.loss.toFixed(2)}→${last.loss.toFixed(2)}`);
+    }
+    if (last && last.mean_token_accuracy != null) {
+      parts.push(`acc ${last.mean_token_accuracy.toFixed(2)}`);
+    }
+    if (/checkpoint/i.test(message || "")) parts.push("checkpoint written");
+  } else {
+    el.className = "train-result failed";
+    parts.push(`✗ ${status}`);
+    if (message) parts.push(message);
+  }
+  el.textContent = parts.filter(Boolean).join("  ·  ");
+  el.hidden = false;
 }
 
 async function discoverActiveRun() {
@@ -1597,15 +1758,31 @@ function _setSessionStatus(status) {
 }
 
 function _renderSessionThrottle() {
-  // Walk the loaded recipe summary if available to surface the cpu_throttle %.
-  // state.recipeDetail isn't always populated; fall back to a "—".
+  // Surface the recipe's cpu_throttle % and, when the host core count is
+  // known, the resolved "N of M cores" with a row of core pips — the
+  // same floor((cores*pct)/100) math the trl_cpu backend applies.
   const el = $("#session-throttle");
   if (!el) return;
-  const detail = state.recipeDetail || {};
-  const yaml = detail.yaml || "";
-  // Cheap parse — recipes write `percent: N` under cpu_throttle.
+  const yaml = (state.recipeDetail || {}).yaml || "";
   const m = yaml.match(/cpu_throttle:[\s\S]{0,200}?percent:\s*(\d+)/);
-  el.textContent = m ? `${m[1]}%` : "—";
+  if (!m) { el.textContent = "—"; return; }
+  const pct = parseInt(m[1], 10);
+  const cores = (state.hardware && state.hardware.cpu && state.hardware.cpu.cores) || 0;
+  el.innerHTML = "";
+  const label = document.createElement("span");
+  if (cores > 0) {
+    const threads = Math.max(1, Math.floor((cores * pct) / 100));
+    label.textContent = `${pct}% · ${threads} of ${cores} cores `;
+    el.appendChild(label);
+    for (let i = 0; i < cores; i += 1) {
+      const pip = document.createElement("span");
+      pip.className = "core-pip" + (i < threads ? " on" : "");
+      el.appendChild(pip);
+    }
+  } else {
+    label.textContent = `${pct}%`;
+    el.appendChild(label);
+  }
 }
 
 function _startElapsedTimer() {

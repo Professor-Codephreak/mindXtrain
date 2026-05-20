@@ -211,6 +211,22 @@ def _build_event_callback(
                     "lr": float(logs["learning_rate"]) if "learning_rate" in logs else None,
                     "grad_norm": float(logs["grad_norm"]) if "grad_norm" in logs else None,
                     "tokens_per_s": None,
+                    # Realtime-feedback fields for the Coach progress bar +
+                    # "is it learning" chart. state.max_steps is the
+                    # authoritative total HF resolved after packing.
+                    "total_steps": (
+                        int(state.max_steps)
+                        if getattr(state, "max_steps", 0)
+                        else None
+                    ),
+                    "mean_token_accuracy": (
+                        float(logs["mean_token_accuracy"])
+                        if "mean_token_accuracy" in logs
+                        else None
+                    ),
+                    "entropy": (
+                        float(logs["entropy"]) if "entropy" in logs else None
+                    ),
                 })
                 sink(
                     f"[trl_cpu] step={state.global_step} loss={logs['loss']:.4f}"

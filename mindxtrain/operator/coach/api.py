@@ -461,6 +461,11 @@ def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
                     lr=ev.get("lr"),
                     grad_norm=ev.get("grad_norm"),
                     tokens_per_s=ev.get("tokens_per_s"),
+                    # Realtime-feedback fields — drive the Coach progress
+                    # bar + "is it learning" accuracy chart.
+                    total_steps=ev.get("total_steps"),
+                    mean_token_accuracy=ev.get("mean_token_accuracy"),
+                    entropy=ev.get("entropy"),
                 ))
             elif kind == "eval":
                 _REGISTRY.publish_threadsafe(run.id, _runs.EvalEvent(

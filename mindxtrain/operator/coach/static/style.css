@@ -208,6 +208,56 @@ textarea { width: 100%; resize: vertical; }
   letter-spacing: 0.05em;
 }
 .session-headline .mono { color: var(--fg); }
+
+/* --- realtime training feedback: phase line, progress bar, result --- */
+.train-phase {
+  margin: 0.35rem 0 0.25rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--fg);
+}
+.train-progress {
+  margin: 0.25rem 0 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.progress-track {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.progress-fill.done { background: var(--ok); }
+.train-result {
+  margin: 0.75rem 0;
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  border-left: 4px solid var(--ok);
+  background: var(--code-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  color: var(--fg);
+}
+.train-result.failed { border-left-color: var(--bad); }
+.core-pip {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-radius: 2px;
+  background: var(--border);
+  vertical-align: middle;
+}
+.core-pip.on { background: var(--accent); }
+
 #session-metrics > summary {
   cursor: pointer;
   user-select: none;
