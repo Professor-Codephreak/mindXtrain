@@ -17,6 +17,7 @@ synthetic Runs with reserved recipe names (`_github_push`,
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import subprocess
 from collections.abc import AsyncIterator, Callable
@@ -54,6 +55,18 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _REGISTRY = _runs.default_registry()
+
+# Strong refs to per-run watchdog tasks (otherwise the garbage collector
+# can reap them mid-await and the sampler keeps running after a terminal
+# status). Cleaned up by the watchdog itself once it returns.
+_METRICS_WATCHDOGS: dict[str, asyncio.Task] = {}
+
+_log = logging.getLogger("mindxtrain.operator.coach")
+
+# Hands-free CPU training: the operator can auto-launch a run at boot so
+# the Coach UI is live without anyone pressing "Run training". Safe ~90s
+# smoke recipe by default; override with MINDXTRAIN_AUTOSTART_RECIPE.
+_DEFAULT_AUTOSTART_RECIPE = "mindx_fallback_qwen3_1_5b_cpu_smoke"
 
 # Reference H100 cost numbers used in the cost slide. Lifted from
 # docs/benchmarks.md so the UI shows the same comparison the README does.
@@ -534,9 +547,92 @@ async def api_runs_launch(req: LaunchRequest) -> _runs.Run:
         _REGISTRY.close_subscribers(run.id)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    # Start the per-run system-metrics sampler. For trl_cpu the trainer
+    # runs in-process so trainer-PID == operator-PID. Axolotl-subprocess
+    # would need its own PID — handled in a follow-up.
+    from mindxtrain.operator.coach.run_metrics import start_metrics_sampler
+    start_metrics_sampler(run.id, os.getpid())
+    # Watchdog stops the sampler on terminal status. The reference is
+    # stored alongside the sampler tasks so the task survives until
+    # cancellation; without this binding GC could reap it mid-watch.
+    _METRICS_WATCHDOGS[run.id] = asyncio.create_task(
+        _stop_metrics_on_terminal(run.id),
+        name=f"metrics-watchdog-{run.id}",
+    )
+
     snapshot = _REGISTRY.get(run.id)
     assert snapshot is not None
     return snapshot
+
+
+async def _stop_metrics_on_terminal(run_id: str) -> None:
+    """Watchdog — stops the metrics sampler when its run hits a terminal status.
+
+    Subscribes to the run's event stream filtered to `status` kinds and
+    bails on the first terminal value. If the registry is torn down or
+    the run vanishes, the subscribe iterator ends and the task exits
+    quietly.
+    """
+    from mindxtrain.operator.coach.run_metrics import stop_metrics_sampler
+
+    terminal = {"succeeded", "failed", "cancelled"}
+    try:
+        async for ev in _REGISTRY.subscribe(run_id, kinds=("status",)):
+            if isinstance(ev, _runs.StatusEvent) and ev.status in terminal:
+                break
+    except Exception:
+        pass
+    await stop_metrics_sampler(run_id)
+    _METRICS_WATCHDOGS.pop(run_id, None)
+
+
+def autostart_enabled() -> bool:
+    """True when MINDXTRAIN_AUTOSTART opts the operator into hands-free training."""
+    return os.environ.get("MINDXTRAIN_AUTOSTART", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def autostart_recipe() -> str:
+    """Recipe the operator auto-launches at boot (MINDXTRAIN_AUTOSTART_RECIPE)."""
+    return (
+        os.environ.get("MINDXTRAIN_AUTOSTART_RECIPE", "").strip()
+        or _DEFAULT_AUTOSTART_RECIPE
+    )
+
+
+async def autostart_cpu_training() -> _runs.Run | None:
+    """Launch a CPU training run at operator boot — no button push required.
+
+    Gated on `MINDXTRAIN_AUTOSTART` so a `TestClient` / CI lifespan never
+    spawns a trainer. The recipe defaults to the safe ~90s smoke recipe;
+    override with `MINDXTRAIN_AUTOSTART_RECIPE`. Idempotent — skips when a
+    run is already pending/running so a uvicorn `--reload` can't stack
+    trainers. Returns the launched `Run`, or `None` when autostart is off,
+    a run is already live, or the launch failed (logged, never raised).
+    """
+    if not autostart_enabled():
+        return None
+    for existing in _REGISTRY.list_runs():
+        if existing.status in ("pending", "running"):
+            _log.info(
+                "autostart: run %s already %s — skipping",
+                existing.id, existing.status,
+            )
+            return None
+    recipe = autostart_recipe()
+    _log.info("autostart: launching hands-free CPU training recipe %r", recipe)
+    try:
+        run = await api_runs_launch(LaunchRequest(recipe=recipe))
+    except HTTPException as exc:
+        _log.warning(
+            "autostart: launch failed (HTTP %s) — %s. The Coach UI stays "
+            "available; press 'Run training' once the cause is resolved.",
+            exc.status_code, exc.detail,
+        )
+        return None
+    _log.info("autostart: run %s launched — Coach UI will discover it", run.id)
+    return run
 
 
 @router.get("/api/runs", response_model=list[_runs.Run])
@@ -550,6 +646,22 @@ async def api_run_get(run_id: str) -> _runs.Run:
     if snap is None:
         raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
     return snap
+
+
+@router.get("/api/runs/{run_id:path}/metrics")
+async def api_run_metrics(run_id: str, since: float = 0.0) -> dict[str, Any]:
+    """Backfill the system-metrics sparklines on tab-switch.
+
+    Returns samples newer than `since` (unix seconds, default 0 = all
+    cached). 404 when the run id is unknown to the registry, [] when
+    the run exists but the sampler hasn't produced any samples yet
+    (e.g., between launch and the first 1 Hz tick).
+    """
+    from mindxtrain.operator.coach.run_metrics import get_buffer
+
+    if _REGISTRY.get(run_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
+    return {"samples": get_buffer(run_id, since=since)}
 
 
 async def _stream(run_id: str, kinds: tuple[str, ...] | None) -> AsyncIterator[str]:

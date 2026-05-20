@@ -205,6 +205,49 @@
         <span id="train-status" class="badge-status pending" hidden>pending</span>
         <span id="train-id" class="hint mono"></span>
       </div>
+      <div id="session-headline" class="session-headline" hidden>
+        <span id="session-status" class="badge-status tier-unknown">idle</span>
+        <span class="hint">elapsed</span>
+        <span id="session-wall" class="mono">00:00:00</span>
+        <span class="hint">cpu-time</span>
+        <span id="session-cputime" class="mono">00:00:00</span>
+        <span class="hint">throttle</span>
+        <span id="session-throttle" class="mono">&mdash;</span>
+        <span class="hint">last loss</span>
+        <span id="session-last-loss" class="mono">&mdash;</span>
+        <span class="hint">eval</span>
+        <span id="session-eval" class="mono">&mdash;</span>
+      </div>
+      <details id="session-metrics" hidden open>
+        <summary>system metrics <span class="hint">(1 Hz &middot; psutil + /proc &middot; d3)</span></summary>
+        <div class="metrics-grid">
+          <div class="spark-cell">
+            <h4>cpu% <span class="hint">(host)</span></h4>
+            <svg id="spark-cpu" width="240" height="40"></svg>
+            <span id="spark-cpu-val" class="mono">&mdash;</span>
+          </div>
+          <div class="spark-cell">
+            <h4>ram% <span class="hint">(host)</span></h4>
+            <svg id="spark-ram" width="240" height="40"></svg>
+            <span id="spark-ram-val" class="mono">&mdash;</span>
+          </div>
+          <div class="spark-cell">
+            <h4>load 1m</h4>
+            <svg id="spark-load" width="240" height="40"></svg>
+            <span id="spark-load-val" class="mono">&mdash;</span>
+          </div>
+          <div class="spark-cell">
+            <h4>trainer rss MB</h4>
+            <svg id="spark-rss" width="240" height="40"></svg>
+            <span id="spark-rss-val" class="mono">&mdash;</span>
+          </div>
+          <div class="spark-cell">
+            <h4>trainer cpu-s/s</h4>
+            <svg id="spark-cpurate" width="240" height="40"></svg>
+            <span id="spark-cpurate-val" class="mono">&mdash;</span>
+          </div>
+        </div>
+      </details>
       <div id="train-charts" hidden>
         <div class="chart-wrap">
           <canvas id="loss-chart" height="180"></canvas>

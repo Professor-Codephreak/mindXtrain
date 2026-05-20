@@ -18,7 +18,11 @@ const state = {
   mei: null,           // most recent MEIScoreView from /coach/api/mei/score
   meiChart: null,      // Chart.js radar instance for the MEI sub-indices
   chatBackendModel: "",  // detected ollama/vllm model name (drives /v1/chat/completions body)
+  metrics: [],         // rolling buffer of MetricsEvent samples (capped METRICS_BUFFER_CAP)
+  metricsTimer: null,  // setInterval handle for elapsed-time counter
 };
+
+const METRICS_BUFFER_CAP = 300;
 
 const MAX_LOG_LINES = 2000;
 
@@ -571,6 +575,9 @@ async function selectRecipe(name) {
     node.classList.toggle("selected", node.dataset.name === name);
   }
   const detail = await getJSON(`/coach/api/recipes/${name}`);
+  // Keep the detail around so the session headline can surface the
+  // recipe's cpu_throttle percent during the run.
+  state.recipeDetail = detail;
   $("#recipe-yaml").textContent = detail.yaml;
   const det = $("#recipe-detail");
   det.hidden = false;
@@ -726,19 +733,23 @@ function subscribeRun(runId) {
   if (state.eventSource) state.eventSource.close();
   const es = new EventSource(`/coach/api/runs/${runId}/events`);
   state.eventSource = es;
+  // Reveal the session-metrics tier and backfill the sparklines so
+  // they don't sit blank waiting for the first 1 Hz tick.
+  _enableSessionMetrics();
+  _backfillSessionMetrics(runId);
   es.addEventListener("step", (e) => pushPoint(JSON.parse(e.data)));
-  es.addEventListener("eval", (e) => {
-    const ev = JSON.parse(e.data);
-    appendLog({ line: `[eval@${ev.step}] ${JSON.stringify(ev.metrics)}` });
-  });
+  es.addEventListener("eval", (e) => _handleEvalEvent(JSON.parse(e.data)));
   es.addEventListener("log", (e) => appendLog(JSON.parse(e.data)));
+  es.addEventListener("metrics", (e) => _handleMetricsEvent(JSON.parse(e.data)));
   es.addEventListener("status", (e) => {
     const ev = JSON.parse(e.data);
     setStatusBadge(ev.status);
+    _setSessionStatus(ev.status);
     const terminal = ["succeeded", "failed", "cancelled"].includes(ev.status);
     if (terminal) {
       es.close();
       state.eventSource = null;
+      _stopElapsedTimer();
       $("#cancel-train").hidden = true;
       $("#run-train").disabled = false;
       if (ev.status === "succeeded") {
@@ -773,7 +784,12 @@ async function runTrain() {
     state.chart.data.datasets[0].data = [];
     state.chart.update("none");
   }
+  // Reset the session-metrics tier for the new run.
+  state.metrics = [];
+  _enableSessionMetrics();
+  _renderSessionSparklines();
   setStatusBadge("launching");
+  _setSessionStatus("launching");
   try {
     const r = await fetch("/coach/api/runs/launch", {
       method: "POST",
@@ -796,6 +812,40 @@ async function runTrain() {
     setStatusBadge("failed");
     appendLog({ line: `launch error: ${e}` });
     $("#run-train").disabled = false;
+  }
+}
+
+async function discoverActiveRun() {
+  // Hands-free CPU lane: when the operator autostarts a run
+  // (MINDXTRAIN_AUTOSTART) the UI must attach to it on page load with no
+  // button push. Picks the most-recent pending/running run, opens the
+  // Train card, and subscribes — the SSE ring buffer replays the steps
+  // and metrics already emitted so nothing is missed.
+  try {
+    const runs = await getJSON("/coach/api/runs");
+    const active = (runs || [])
+      .filter((r) => r.status === "running" || r.status === "pending")
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+    if (!active) return;
+    state.run = active;
+    if (!state.recipe) state.recipe = active.recipe;
+    // Pull the recipe detail so the headline shows the cpu_throttle %.
+    try {
+      state.recipeDetail = await getJSON(
+        `/coach/api/recipes/${encodeURIComponent(active.recipe)}`,
+      );
+    } catch (_e) { /* throttle headline falls back to — */ }
+    progressTo("step-train");
+    $("#train-id").textContent = `run ${active.id} (autostarted · ${active.recipe})`;
+    $("#train-charts").hidden = false;
+    $("#train-log-wrap").hidden = false;
+    $("#cancel-train").hidden = false;
+    $("#run-train").disabled = true;
+    setStatusBadge(active.status);
+    appendLog({ line: `attached to autostarted run ${active.id}` });
+    subscribeRun(active.id);
+  } catch (_e) {
+    /* no operator runs yet — the normal case on a fresh manual boot */
   }
 }
 
@@ -1470,8 +1520,206 @@ window.addEventListener("DOMContentLoaded", () => {
   runPreflight();
   refreshChronos();
   _startChronosPolling();
+  // Hands-free: attach to any run the operator autostarted at boot so
+  // the Train card is live without a button push.
+  discoverActiveRun();
 });
 
+
+// --- session metrics (per-training-run system load) ---------------------
+//
+// Five d3 sparklines + a five-cell mono headline live inside #step-train.
+// Data shape: array of MetricsEvent dicts (see runs.py:MetricsEvent), each
+// carrying ts/cpu_pct/ram_pct/load_1m/proc_rss_mb/proc_cpu_seconds.
+
+function _enableSessionMetrics() {
+  const headline = $("#session-headline");
+  const metrics = $("#session-metrics");
+  if (headline) headline.hidden = false;
+  if (metrics) metrics.hidden = false;
+  _renderSessionThrottle();
+  _startElapsedTimer();
+}
+
+function _setSessionStatus(status) {
+  const pill = $("#session-status");
+  if (!pill) return;
+  pill.textContent = status;
+  // Map run status → tier class so the pill picks up the same colour
+  // tokens defined for the chronos card (correlated/degraded/drifted).
+  const tier = {
+    running: "tier-correlated",
+    succeeded: "tier-correlated",
+    pending: "tier-unknown",
+    launching: "tier-unknown",
+    failed: "tier-drifted",
+    cancelled: "tier-degraded",
+  }[status] || "tier-unknown";
+  pill.className = `badge-status ${tier}`;
+}
+
+function _renderSessionThrottle() {
+  // Walk the loaded recipe summary if available to surface the cpu_throttle %.
+  // state.recipeDetail isn't always populated; fall back to a "—".
+  const el = $("#session-throttle");
+  if (!el) return;
+  const detail = state.recipeDetail || {};
+  const yaml = detail.yaml || "";
+  // Cheap parse — recipes write `percent: N` under cpu_throttle.
+  const m = yaml.match(/cpu_throttle:[\s\S]{0,200}?percent:\s*(\d+)/);
+  el.textContent = m ? `${m[1]}%` : "—";
+}
+
+function _startElapsedTimer() {
+  if (state.metricsTimer) return;
+  // Wall + cpu-time counter ticks at 1 Hz even before the first sample.
+  state.metricsTimer = setInterval(() => {
+    if (!state.run) return;
+    const startedMs = Date.parse(state.run.created_at || "");
+    if (!Number.isNaN(startedMs)) {
+      const elapsedS = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+      const wall = $("#session-wall");
+      if (wall) wall.textContent = _formatHMS(elapsedS);
+    }
+    const last = state.metrics[state.metrics.length - 1];
+    if (last) {
+      const cpu = $("#session-cputime");
+      if (cpu) cpu.textContent = _formatHMS(Math.floor(last.proc_cpu_seconds));
+    }
+  }, 1000);
+}
+
+function _stopElapsedTimer() {
+  if (state.metricsTimer) {
+    clearInterval(state.metricsTimer);
+    state.metricsTimer = null;
+  }
+}
+
+function _formatHMS(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(r)}`;
+}
+
+async function _backfillSessionMetrics(runId) {
+  try {
+    const body = await getJSON(
+      `/coach/api/runs/${encodeURIComponent(runId)}/metrics`,
+    );
+    const samples = body.samples || [];
+    if (samples.length) {
+      state.metrics = samples.slice(-METRICS_BUFFER_CAP);
+      _renderSessionSparklines();
+      // Update last-loss + cpu-time headline with the freshest sample.
+      _updateHeadlineFromSample(samples[samples.length - 1]);
+    }
+  } catch (_e) { /* graceful — first launch has no samples */ }
+}
+
+function _handleMetricsEvent(ev) {
+  state.metrics.push(ev);
+  if (state.metrics.length > METRICS_BUFFER_CAP) {
+    state.metrics.splice(0, state.metrics.length - METRICS_BUFFER_CAP);
+  }
+  _updateHeadlineFromSample(ev);
+  _renderSessionSparklines();
+}
+
+function _updateHeadlineFromSample(ev) {
+  const cpu = $("#session-cputime");
+  if (cpu) cpu.textContent = _formatHMS(Math.floor(ev.proc_cpu_seconds));
+  // Last-loss comes from the existing step chart (Chart.js), not the
+  // metrics stream — sync it here so the headline always reflects the
+  // most recent loss value.
+  const loss = state.chart && state.chart.data && state.chart.data.datasets[0];
+  if (loss && loss.data && loss.data.length) {
+    const v = loss.data[loss.data.length - 1];
+    const lossEl = $("#session-last-loss");
+    if (lossEl) lossEl.textContent = (typeof v === "number") ? v.toFixed(4) : "—";
+  }
+}
+
+function _handleEvalEvent(ev) {
+  // Every eval checkpoint streams to the raw log...
+  const metrics = ev.metrics || {};
+  appendLog({ line: `[eval@${ev.step}] ${JSON.stringify(metrics)}` });
+  // ...and the headline surfaces the freshest eval signal so model
+  // quality is visible without scrolling the log.
+  const el = $("#session-eval");
+  if (!el) return;
+  let label = "loss";
+  let val = metrics.eval_loss;
+  if (typeof val !== "number") {
+    const entry = Object.entries(metrics).find(([, v]) => typeof v === "number");
+    if (entry) { [label, val] = entry; }
+  }
+  if (typeof val === "number") {
+    el.textContent = `${val.toFixed(4)} ${label} @${ev.step}`;
+  }
+}
+
+function _renderSessionSparklines() {
+  if (typeof d3 === "undefined") return;
+  const samples = state.metrics;
+  _renderSparkline("#spark-cpu", "#spark-cpu-val", samples,
+    s => s.cpu_pct, v => `${v.toFixed(1)}%`, "#f7921e");
+  _renderSparkline("#spark-ram", "#spark-ram-val", samples,
+    s => s.ram_pct, v => `${v.toFixed(1)}%`, "#2f81f7");
+  _renderSparkline("#spark-load", "#spark-load-val", samples,
+    s => s.load_1m, v => v.toFixed(2), "#2ea043");
+  _renderSparkline("#spark-rss", "#spark-rss-val", samples,
+    s => s.proc_rss_mb, v => `${v.toFixed(0)} MB`, "#f7921e");
+  // cpu-s/s: derive a delta-per-second from consecutive samples.
+  const rates = [];
+  for (let i = 1; i < samples.length; i += 1) {
+    const dt = samples[i].ts - samples[i - 1].ts;
+    const dCpu = samples[i].proc_cpu_seconds - samples[i - 1].proc_cpu_seconds;
+    rates.push({
+      ts: samples[i].ts,
+      value: dt > 0 ? dCpu / dt : 0,
+    });
+  }
+  _renderSparkline("#spark-cpurate", "#spark-cpurate-val", rates,
+    s => s.value, v => v.toFixed(2), "#d29922");
+}
+
+function _renderSparkline(svgSel, valSel, series, getY, formatVal, color) {
+  const svg = d3.select(svgSel);
+  if (svg.empty()) return;
+  svg.selectAll("*").remove();
+  const w = +svg.attr("width") || 240;
+  const h = +svg.attr("height") || 40;
+  const pad = 3;
+  const valEl = document.querySelector(valSel);
+  if (!series.length) {
+    if (valEl) valEl.textContent = "—";
+    return;
+  }
+  const ys = series.map(getY);
+  const yMin = Math.min(...ys);
+  const yMax = Math.max(...ys);
+  const yScale = d3.scaleLinear()
+    .domain([yMin, Math.max(yMax, yMin + 0.0001)])
+    .range([h - pad, pad]);
+  const xScale = d3.scaleLinear()
+    .domain([0, Math.max(1, series.length - 1)])
+    .range([pad, w - pad]);
+  const line = d3.line()
+    .x((_, i) => xScale(i))
+    .y((_, i) => yScale(ys[i]))
+    .curve(d3.curveMonotoneX);
+  svg.append("path")
+    .datum(series)
+    .attr("d", line)
+    .attr("fill", "none")
+    .attr("stroke", color)
+    .attr("stroke-width", 1.5);
+  if (valEl) valEl.textContent = formatVal(ys[ys.length - 1]);
+}
 
 // --- chronos card --------------------------------------------------------
 

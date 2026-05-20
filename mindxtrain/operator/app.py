@@ -16,11 +16,17 @@ is at /coach/ and the public training-jobs API is at /v1/training/jobs.
 
 from __future__ import annotations
 
+import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from fastapi import FastAPI, HTTPException
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -162,10 +168,32 @@ def ollama_first_model() -> str | None:
     except (httpx.HTTPError, OSError, ValueError, IndexError):
         return None
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Operator startup — optionally auto-launch a hands-free CPU training run.
+
+    When `MINDXTRAIN_AUTOSTART` is set the operator kicks off a CPU
+    training run the moment uvicorn boots, so the Coach UI shows a live
+    session without anyone pressing "Run training". Autostart is off by
+    default so `TestClient` lifespans and CI never spawn a trainer.
+    Failures are swallowed — a bad autostart must never block boot.
+    """
+    from mindxtrain.operator.coach.api import autostart_cpu_training
+
+    try:
+        await autostart_cpu_training()
+    except Exception:  # boot must survive any autostart fault
+        logging.getLogger("mindxtrain.operator").exception(
+            "autostart raised — Coach UI still available, launch manually",
+        )
+    yield
+
+
 app = FastAPI(
     title="automindXtrain",
     version=__version__,
     description="Pluggable LLM cognitive runtime for the mindXtrain pipeline.",
+    lifespan=_lifespan,
 )
 
 # --- coach UI -------------------------------------------------------------

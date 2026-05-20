@@ -92,8 +92,28 @@ class EnergyEvent(_Event):
     gpu_index: int = 0
 
 
+class MetricsEvent(_Event):
+    """1 Hz system-metrics sample published while a run is active.
+
+    Drives the #step-train sparklines: CPU% / RAM% / load_1m (host
+    headline) + trainer-PID RSS_mb + cumulative CPU-time. Sample
+    cadence is whatever the per-run sampler in
+    `mindxtrain/operator/coach/run_metrics.py` was started with
+    (default 1 Hz). Process-gone is signalled with zeros and the
+    sampler exits.
+    """
+    kind: Literal["metrics"] = "metrics"
+    run_id: str
+    ts: float
+    cpu_pct: float
+    ram_pct: float
+    load_1m: float
+    proc_rss_mb: float
+    proc_cpu_seconds: float
+
+
 TrainEvent = Annotated[
-    StatusEvent | StepEvent | EvalEvent | LogEvent | EnergyEvent,
+    StatusEvent | StepEvent | EvalEvent | LogEvent | EnergyEvent | MetricsEvent,
     Field(discriminator="kind"),
 ]
 

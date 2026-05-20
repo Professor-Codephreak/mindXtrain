@@ -179,6 +179,59 @@ textarea { width: 100%; resize: vertical; }
   border-color: var(--accent);
   background: rgba(247, 146, 30, 0.05);
 }
+/* Training session — tiered metrics panel inside #step-train */
+.session-headline {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+.session-headline .hint {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.session-headline .mono { color: var(--fg); }
+#session-metrics > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+#session-metrics > summary:hover { color: var(--fg); }
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+  margin: 0.25rem 0 0.75rem;
+}
+.spark-cell h4 {
+  margin: 0 0 0.25rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+.spark-cell svg {
+  display: block;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 100%;
+  max-width: 320px;
+}
+.spark-cell .mono {
+  display: inline-block;
+  margin-top: 0.2rem;
+  font-size: 0.85rem;
+  color: var(--fg);
+}
+
 .chronos-step { background: var(--accent-2); color: #fff; font-size: 0.95rem; }
 .chronos-headline {
   display: flex;
