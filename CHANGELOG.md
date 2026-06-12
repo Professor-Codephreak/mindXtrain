@@ -4,6 +4,18 @@ All notable changes to **mindxtrain** are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Governance layer** (`mindxtrain.governance`) — classroom / boardroom / dojo,
+  a clean-room reimplementation of openmindx/openmind's Boardroom-consensus +
+  Dojo-evaluation behaviour. The **classroom** graduates an actor on its imprint;
+  the **boardroom** (any N role-based members) convenes on the promotion motion →
+  approved / rejected / disputed; the **dojo** settles a dispute with a panel of a
+  **prime number** of judges (odd prime ≥ 3 → no tie, always resolves). See
+  [`docs/governance.md`](docs/governance.md).
+
 ## [1.0.0] — 2026-06-11
 
 First production release. **CPU training is active end-to-end**; the GPU

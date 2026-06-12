@@ -20,6 +20,7 @@ The base install is CPU-only and runs the CLI, Coach UI, `bench --dry-run`, mani
 | Look up every YAML field | [`docs/yaml_schema.md`](docs/yaml_schema.md) |
 | Understand the autotune probe | [`docs/autotune.md`](docs/autotune.md) |
 | Understand the Coach UI | [`docs/coach.md`](docs/coach.md) |
+| Understand classroom / boardroom / dojo governance | [`docs/governance.md`](docs/governance.md) |
 | See the frozen design briefs | [`docs/blueprints/`](docs/blueprints/) |
 
 ## Verification gates (must all pass before pushing)

@@ -113,4 +113,5 @@ mindX artifacts (dream corpus, persona) through boundaries, it does not vendor m
 | `docs/cli.md` | Every verb with synopsis, options, exit codes. |
 | `docs/yaml_schema.md` | Every field of the 10-section `XTrainConfig`. |
 | `docs/coach.md` | Interactive `/coach/` web UI bundled in the operator. |
+| `docs/governance.md` | classroom / boardroom (any-N consensus) / dojo (prime-N dispute settlement). |
 | `docs/blueprints/` | Frozen source design briefs (the spec the project was built against). |
