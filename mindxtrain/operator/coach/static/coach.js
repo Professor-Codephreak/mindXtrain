@@ -118,6 +118,7 @@ const STAGE_FOR_STEP = {
   "step-deploy":       "mind",
   "step-train":        "mind",
   "step-receipt":      "cust",
+  "step-boardroom":    "cust",
   "step-mei":          "cust",
   "step-cost":         "cust",
   "step-chat":         "cust",
@@ -1780,6 +1781,96 @@ function wireCreateDataset() {
   refreshDatasets();
 }
 
+// --- governance: boardroom (any-N) + dojo (prime-N) ----------------------
+
+let _lastBoardSize = 0;
+
+async function loadBoardroomPresets() {
+  const sel = $("#br-preset");
+  if (!sel) return;
+  try {
+    const presets = await getJSON("/coach/api/boardroom/presets");
+    sel.innerHTML = "";
+    for (const name of Object.keys(presets)) {
+      const o = document.createElement("option");
+      o.value = name;
+      o.textContent = `${name} (${presets[name].length})`;
+      o.dataset.roles = JSON.stringify(presets[name]);
+      sel.appendChild(o);
+    }
+  } catch (e) { /* presets unavailable; leave empty */ }
+}
+
+function _boardMembers() {
+  const sel = $("#br-preset");
+  const opt = sel && sel.selectedOptions[0];
+  const roles = opt ? JSON.parse(opt.dataset.roles || "[]") : ["advocate", "critic", "analyst"];
+  const model = $("#br-model").value.trim() || "llama3.2";
+  return roles.map((r, i) => ({ id: `${r}-${i}`, role: r, model }));
+}
+
+function _defaultMotion() {
+  return ($("#br-motion").value.trim())
+    || (state.run ? `promote actor ${state.run.id}` : "promote the actor");
+}
+
+async function conveneBoardroom() {
+  const status = $("#br-status");
+  const members = _boardMembers();
+  _lastBoardSize = members.length;
+  status.textContent = "convening — members deliberating…";
+  $("#br-dojo").hidden = true;
+  try {
+    const body = await postJSON("/coach/api/boardroom/convene", {
+      motion: _defaultMotion(), members,
+      model: $("#br-model").value.trim() || "llama3.2", use_models: true,
+    });
+    const d = body.decision;
+    const outcome = $("#br-outcome");
+    outcome.hidden = false;
+    outcome.textContent = `${d.outcome.toUpperCase()} — ${d.rationale}`;
+    const list = $("#br-votes");
+    list.hidden = false;
+    list.innerHTML = "";
+    for (const del of body.deliberations) {
+      const li = document.createElement("li");
+      li.innerHTML = `<code>${del.vote} · ${del.role}</code>` +
+        `<span class="mono">${(del.rationale || del.error || "").slice(0, 140)}</span>`;
+      list.appendChild(li);
+    }
+    status.textContent = `decided: ${d.outcome}`;
+    if (d.disputed) {
+      $("#br-dojo").hidden = false;
+      $("#br-verdict").textContent = "disputed — settle in a prime dojo";
+    }
+  } catch (e) {
+    status.textContent = `convene failed: ${e} (is a chat backend running?)`;
+  }
+}
+
+async function settleDojo() {
+  const v = $("#br-verdict");
+  v.textContent = "dojo deliberating…";
+  try {
+    const verdict = await postJSON("/coach/api/dojo/settle", {
+      motion: _defaultMotion(), size: _lastBoardSize || 3,
+      model: $("#br-model").value.trim() || "llama3.2", use_models: true,
+    });
+    v.textContent = `dojo (${verdict.judges.length} judges) → ` +
+      `${verdict.winner.toUpperCase()} (${verdict.approvals}-${verdict.rejections})`;
+  } catch (e) {
+    v.textContent = `settle failed: ${e}`;
+  }
+}
+
+function wireBoardroom() {
+  const convene = $("#br-convene");
+  const settle = $("#br-settle");
+  if (convene) convene.addEventListener("click", conveneBoardroom);
+  if (settle) settle.addEventListener("click", settleDojo);
+  loadBoardroomPresets();
+}
+
 async function refreshMEIHistory() {
   const wrap = $("#mei-history-wrap");
   const tbody = $("#mei-history-table tbody");
@@ -1896,6 +1987,9 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Create script (dataset authoring).
   wireCreateDataset();
+
+  // Governance: boardroom + dojo.
+  wireBoardroom();
 
   // Deploy section.
   $("#run-github").addEventListener("click", runGithubPush);

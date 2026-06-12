@@ -374,6 +374,35 @@
       <p class="hint" id="receipt-empty">waiting for a completed run&hellip;</p>
     </section>
 
+    <section id="step-boardroom" class="card" data-step-id="step-boardroom">
+      <header>
+        <h2><span class="step">&#9878;</span> Boardroom</h2>
+        <span class="hint">any-N consensus &middot; dojo settles disputes (prime)</span>
+      </header>
+      <p class="prose">
+        The model is an <strong>actor</strong>; the classroom graduates it; the
+        <strong>boardroom</strong> (any number of role-based members) decides whether to
+        promote it. A tie escalates to a <strong>dojo</strong> &mdash; a panel of a
+        <strong>prime number</strong> of judges, so the dispute always settles with no tie.
+        Members deliberate with real models via the configured chat backend.
+      </p>
+      <div class="dataset-form">
+        <label>motion <input id="br-motion" type="text" placeholder="promote actor &lt;run&gt;" style="width:24rem"></label>
+        <label>board <select id="br-preset"></select></label>
+        <label>model <input id="br-model" type="text" placeholder="llama3.2" style="width:14rem"></label>
+        <div class="train-controls">
+          <button id="br-convene">Convene (models)</button>
+          <span id="br-status" class="hint"></span>
+        </div>
+        <p id="br-outcome" class="hint" hidden></p>
+        <ul id="br-votes" class="summary" hidden></ul>
+        <div id="br-dojo" class="train-controls" hidden>
+          <button id="br-settle">Settle in dojo (prime)</button>
+          <span id="br-verdict" class="hint"></span>
+        </div>
+      </div>
+    </section>
+
     <section id="step-mei" class="card" data-step-id="step-mei">
       <header>
         <h2><span class="step">8</span> mindX Efficiency Index</h2>

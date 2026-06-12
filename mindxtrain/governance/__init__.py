@@ -27,6 +27,12 @@ from mindxtrain.governance.boardroom import (
 )
 from mindxtrain.governance.classroom import Graduation, graduate
 from mindxtrain.governance.dojo import Dojo, DojoVerdict, settle_dispute
+from mindxtrain.governance.panel import (
+    Deliberation,
+    deliberate,
+    model_ballot,
+    model_judge_ballot,
+)
 from mindxtrain.governance.primes import is_prime, nearest_prime, next_prime
 
 __all__ = [
@@ -34,13 +40,17 @@ __all__ = [
     "ROLES",
     "Boardroom",
     "BoardroomDecision",
+    "Deliberation",
     "Dojo",
     "DojoVerdict",
     "Graduation",
     "Member",
     "Vote",
+    "deliberate",
     "graduate",
     "is_prime",
+    "model_ballot",
+    "model_judge_ballot",
     "nearest_prime",
     "next_prime",
     "settle_dispute",

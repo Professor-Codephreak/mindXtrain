@@ -43,8 +43,34 @@ A boardroom can be any size because deliberation tolerates abstention and "no de
 is odd, the majority is strict, and the verdict is final. See `governance/primes.py`
 (`is_prime`, `next_prime`, `nearest_prime`) and `dojo.prime_dojo_size`.
 
+## Model-backed deliberation
+
+`governance/panel.py` backs members + judges with **real models** (any OpenAI-compatible
+backend — the same ollama / vLLM the operator serves). `deliberate(member, motion)` prompts a
+member from its role stance and parses a `VERDICT: APPROVE|REJECT|ABSTAIN`; `model_ballot()` /
+`model_judge_ballot()` return ballots you pass straight to `Boardroom.convene` /
+`Dojo.settle`. Lazy + best-effort: a model that errors or returns no parseable verdict abstains
+(boardroom) or is recorded as reject (dojo). The base URL resolves from
+`MINDXTRAIN_OPENAI_BASE_URL` / `MINDXTRAIN_VLLM_BASE_URL` / `MINDXTRAIN_OLLAMA_BASE_URL`.
+
+## Coach surface
+
+The **Boardroom** card (after the receipt card) convenes a board on a promotion motion and,
+if disputed, settles it in a prime dojo:
+
+- `GET /coach/api/boardroom/presets` — named boards → roles.
+- `POST /coach/api/boardroom/convene` — `{motion, members:[{id,role,model}], quorum, votes?,
+  use_models?, base_url?}`. Tally supplied `votes`, or `use_models: true` to have each member's
+  model deliberate. Model calls run in a worker thread (`asyncio.to_thread`) so the operator
+  event loop never blocks on inference. Returns the decision + per-member deliberations.
+- `POST /coach/api/dojo/settle` — `{motion, size, model?, votes?, use_models?, base_url?}`.
+  Sizes the panel to the nearest odd prime and settles.
+
 ## Tests
 
-`tests/test_governance.py` — primes, any-N boardroom (majority / tie / no-quorum), prime-only
-dojo (rejects non-prime panels, settles without tie), and the end-to-end
-classroom → boardroom-disputed → dojo-settled flow.
+- `tests/test_governance.py` — primes, any-N boardroom (majority / tie / no-quorum), prime-only
+  dojo (rejects non-prime panels, settles without tie), end-to-end classroom → disputed → dojo.
+- `tests/test_governance_panel.py` — verdict parsing, role stances, model-backed ballots driving
+  a boardroom + dojo over a mocked chat backend, graceful backend-error handling.
+- `tests/test_coach_governance_api.py` — convene (votes + model mode), dojo settle (prime sizing),
+  422 paths, and the Coach card/JS presence.

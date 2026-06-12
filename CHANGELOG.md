@@ -15,6 +15,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   approved / rejected / disputed; the **dojo** settles a dispute with a panel of a
   **prime number** of judges (odd prime ≥ 3 → no tie, always resolves). See
   [`docs/governance.md`](docs/governance.md).
+- **Model-backed boardroom/dojo** (`governance.panel`) — members + judges
+  deliberate with real models over any OpenAI-compatible backend
+  (`deliberate`, `model_ballot`, `model_judge_ballot`). Coach **Boardroom** card +
+  `GET /coach/api/boardroom/presets`, `POST /coach/api/boardroom/convene`,
+  `POST /coach/api/dojo/settle` (model deliberation runs off the event loop).
 
 ## [1.0.0] — 2026-06-11
 

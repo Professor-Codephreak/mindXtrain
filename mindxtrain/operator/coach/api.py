@@ -563,6 +563,112 @@ async def api_imprint_score(req: ImprintScoreRequest) -> dict[str, Any]:
     return report.model_dump()
 
 
+# ---- governance: boardroom (any-N) + dojo (prime-N) ---------------------
+# A model is an actor; the classroom graduates it; the boardroom decides about
+# the graduation; a disputed boardroom is settled by a prime-sized dojo. The
+# boardroom/dojo can be backed by real models (use_models) or tallied from
+# supplied votes. Model deliberation runs in a worker thread so the operator
+# event loop never blocks on inference.
+
+
+class MemberIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    role: str = "generalist"
+    model: str = ""
+
+
+class ConveneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    motion: str
+    members: list[MemberIn]
+    quorum: float = Field(default=0.5, ge=0.0, le=1.0)
+    votes: dict[str, str] | None = None
+    use_models: bool = False
+    base_url: str | None = None
+
+
+class DojoSettleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    motion: str
+    size: int = 3
+    model: str = ""
+    votes: dict[str, str] | None = None
+    use_models: bool = False
+    base_url: str | None = None
+
+
+@router.get("/api/boardroom/presets")
+async def api_boardroom_presets() -> dict[str, list[str]]:
+    """Named preset boards → their advisor roles."""
+    from mindxtrain.governance.boardroom import PRESET_BOARDS
+
+    return {name: list(roles) for name, roles in PRESET_BOARDS.items()}
+
+
+@router.post("/api/boardroom/convene")
+async def api_boardroom_convene(req: ConveneRequest) -> dict[str, Any]:
+    """Convene a boardroom on a motion. Tally supplied `votes`, or `use_models`
+    to have each member's model deliberate (run off the event loop)."""
+    from pydantic import ValidationError
+
+    from mindxtrain.governance import Boardroom, Member
+
+    try:
+        members = [Member(id=m.id, role=m.role, model=m.model) for m in req.members]  # type: ignore[arg-type]
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not members:
+        raise HTTPException(status_code=422, detail="a boardroom needs at least one member")
+    board = Boardroom(members=members, quorum=req.quorum)
+
+    deliberations: list[dict[str, Any]] = []
+    if req.use_models:
+        from mindxtrain.governance import panel as _panel
+
+        async def _one(m: Member) -> Any:
+            return await asyncio.to_thread(_panel.deliberate, m, req.motion, base_url=req.base_url)
+
+        delibs = await asyncio.gather(*[_one(m) for m in members])
+        votes = {d.member_id: d.vote for d in delibs}
+        deliberations = [d.model_dump() for d in delibs]
+        decision = board.convene(req.motion, votes)
+    elif req.votes is not None:
+        try:
+            decision = board.convene(req.motion, dict(req.votes))  # type: ignore[arg-type]
+        except (ValidationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=422, detail="provide `votes` or set `use_models: true`")
+
+    return {"decision": decision.model_dump(), "deliberations": deliberations}
+
+
+@router.post("/api/dojo/settle")
+async def api_dojo_settle(req: DojoSettleRequest) -> dict[str, Any]:
+    """Settle a dispute with a prime-sized dojo. Tally supplied `votes` (keyed
+    `judge-0..`) or `use_models` to have the judges rule (off the event loop)."""
+    from mindxtrain.governance import Dojo
+
+    dojo = Dojo.sized(req.size)
+    if req.use_models:
+        from mindxtrain.governance import panel as _panel
+
+        kw = {"base_url": req.base_url}
+        if req.model:
+            kw["default_model"] = req.model
+        ballot = _panel.model_judge_ballot(**kw)
+        verdict = await asyncio.to_thread(dojo.settle, req.motion, ballot)
+    elif req.votes is not None:
+        try:
+            verdict = dojo.settle(req.motion, dict(req.votes))  # type: ignore[arg-type]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    else:
+        raise HTTPException(status_code=422, detail="provide `votes` or set `use_models: true`")
+    return verdict.model_dump()
+
+
 # ---- live training runs (SSE) -------------------------------------------
 
 
