@@ -59,6 +59,53 @@ def test_persona_endpoint_default():
     assert "system_prompt" in p
 
 
+def test_personas_endpoint_lists_builtins_and_skills():
+    body = client.get("/coach/api/personas").json()
+    pnames = {p["name"] for p in body["personas"]}
+    snames = {s["name"] for s in body["skills"]}
+    assert {"codephreak", "assistant", "mentor"} <= pnames
+    assert {"software_engineer", "platform_architect", "bash", "solidity"} <= snames
+
+
+def test_create_script_from_builtin_persona_with_skills():
+    r = client.post("/coach/api/datasets", json={
+        "name": "codephreak skills",
+        "persona": "codephreak",
+        "skills": ["software_engineer", "solidity"],
+        "seed_voice": True,
+    })
+    assert r.status_code == 200, r.text
+    info = r.json()
+    # 3 software_engineer + 3 solidity exchanges + 2 codephreak voice seeds = 8 rows.
+    assert info["rows"] == 8
+    assert set(info["skills"]) == {"software_engineer", "solidity"}
+    # Training params auto-derived from the dataset size.
+    assert info["train_params"]["epochs"] >= 8
+    assert info["train_params"]["grad_accum"] == 1
+
+    prev = client.get(f"/coach/api/datasets/{info['name']}").json()
+    sys_msg = prev["sample"][0]["messages"][0]["content"]
+    assert "Codephreak" in sys_msg  # persona voice carried into the script
+
+
+def test_coach_index_has_persona_and_skill_controls():
+    html = client.get("/coach/").text
+    assert 'id="ds-persona"' in html
+    assert 'id="ds-skills"' in html
+    js = client.get("/coach/static/coach.js").text
+    assert "loadPersonasAndSkills" in js
+    assert "/coach/api/personas" in js
+
+
+def test_create_script_from_only_skills():
+    r = client.post("/coach/api/datasets", json={
+        "name": "bash-only", "persona": "assistant", "skills": ["bash"],
+        "seed_voice": False,
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["rows"] == 3  # bash skill's 3 exchanges
+
+
 def test_imprint_score_endpoint():
     r = client.post(
         "/coach/api/imprint/score",

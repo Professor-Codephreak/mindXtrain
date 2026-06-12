@@ -162,6 +162,51 @@ async def coach_index() -> FileResponse:
     return FileResponse(_STATIC_DIR / "index.html")
 
 
+@router.get("/modelfile", response_class=FileResponse, include_in_schema=False)
+async def coach_modelfile_page() -> FileResponse:
+    """Standalone Ollama Modelfile builder (opened in a separate window)."""
+    return FileResponse(_STATIC_DIR / "modelfile.html")
+
+
+@router.get("/api/modelfile/params")
+async def api_modelfile_params() -> dict[str, Any]:
+    """The full PARAMETER catalogue so the builder can render toggles + inputs."""
+    from mindxtrain.deploy.modelfile import MODELFILE_PARAMS
+
+    return {"parameters": [p.model_dump() for p in MODELFILE_PARAMS]}
+
+
+@router.post("/api/modelfile/build")
+async def api_modelfile_build(spec: dict[str, Any]) -> dict[str, str]:
+    """Render a Modelfile from a spec body → `{modelfile: <text>}`."""
+    from pydantic import ValidationError
+
+    from mindxtrain.deploy.modelfile import ModelfileSpec, render_modelfile
+
+    try:
+        parsed = ModelfileSpec.model_validate(spec)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"modelfile": render_modelfile(parsed)}
+
+
+@router.post("/api/modelfile/create")
+async def api_modelfile_create(body: dict[str, Any]) -> dict[str, str]:
+    """Write the Modelfile and run `ollama create <tag>` (off the event loop)."""
+    from pydantic import ValidationError
+
+    from mindxtrain.deploy.modelfile import ModelfileSpec, create_model
+
+    tag = str(body.get("tag", "")).strip()
+    if not tag:
+        raise HTTPException(status_code=422, detail="a `tag` is required to create the model")
+    try:
+        parsed = ModelfileSpec.model_validate(body.get("spec", {}))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await asyncio.to_thread(create_model, tag, parsed)
+
+
 @router.get("/api/recipes", response_model=list[RecipeSummary])
 async def api_recipes() -> list[RecipeSummary]:
     out: list[RecipeSummary] = []
@@ -437,10 +482,12 @@ class ExchangeIn(BaseModel):
 class CreateScriptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(description="dataset name; becomes out/datasets/<name>/script.jsonl")
+    persona: str = Field(default="", description="built-in persona key (overrides persona_name/system_prompt)")
     persona_name: str = "actor"
     system_prompt: str = ""
     voice_examples: list[str] = Field(default_factory=list)
     exchanges: list[ExchangeIn] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list, description="skill bundles to mix in")
     seed_voice: bool = True
 
 
@@ -450,6 +497,8 @@ class ScriptInfo(BaseModel):
     path: str
     rows: int
     persona_name: str
+    skills: list[str] = Field(default_factory=list)
+    train_params: dict[str, int] = Field(default_factory=dict)
 
 
 class ScriptPreview(BaseModel):
@@ -477,30 +526,61 @@ async def api_persona() -> dict[str, Any]:
     }
 
 
+@router.get("/api/personas")
+async def api_personas() -> dict[str, Any]:
+    """Built-in personas + toggleable skills for the Create-script picker."""
+    from mindxtrain.data import personas as _pz
+
+    return {"personas": _pz.list_personas(), "skills": _pz.list_skills()}
+
+
 @router.post("/api/datasets", response_model=ScriptInfo)
 async def api_create_dataset(req: CreateScriptRequest) -> ScriptInfo:
-    """Author a script (persona + exchanges) → `source: local` JSONL on disk."""
-    from mindxtrain.data.scripts import Exchange, Persona, author_script
+    """Author a script from a persona + optional skills + exchanges → `source: local` JSONL.
 
-    if not req.exchanges and not (req.seed_voice and req.voice_examples):
+    Skills (software_engineer / platform_architect / bash / solidity) mix their
+    in-domain exchanges into the script. Returns the row count + training params
+    auto-derived from the dataset size.
+    """
+    from mindxtrain.data import personas as _pz
+    from mindxtrain.data.scripts import (
+        Exchange,
+        Persona,
+        build_script_rows,
+        derive_training_params,
+        write_script_jsonl,
+    )
+
+    # Base persona: a built-in (with skills mixed in) or the explicit fields.
+    if req.persona:
+        persona, skill_exchanges = _pz.compose(req.persona, req.skills)
+    else:
+        base = Persona(
+            name=req.persona_name or "actor",
+            system_prompt=req.system_prompt,
+            voice_examples=list(req.voice_examples),
+        )
+        persona, skill_exchanges = _pz.compose(base, req.skills)
+
+    exchanges = [Exchange(user=e.user, assistant=e.assistant) for e in req.exchanges]
+    exchanges.extend(skill_exchanges)
+
+    if not exchanges and not (req.seed_voice and persona.voice_examples):
         raise HTTPException(
             status_code=422,
-            detail="provide at least one exchange or a voice example to seed.",
+            detail="provide an exchange, a skill, or a voice example to seed.",
         )
+
     name = _safe_dataset_name(req.name)
     out_path = _datasets_root() / name / "script.jsonl"
-    persona = Persona(
-        name=req.persona_name or "actor",
-        system_prompt=req.system_prompt,
-        voice_examples=list(req.voice_examples),
+    rows_list = build_script_rows(persona, exchanges, seed_voice=req.seed_voice)
+    write_script_jsonl(rows_list, out_path)
+    rows = len(rows_list)
+    return ScriptInfo(
+        name=name, path=str(out_path), rows=rows, persona_name=persona.name,
+        skills=[s for s in req.skills if s in _pz.SKILLS],
+        train_params=derive_training_params(rows),
     )
-    path, rows = author_script(
-        out_path=out_path,
-        exchanges=[Exchange(user=e.user, assistant=e.assistant) for e in req.exchanges],
-        persona=persona,
-        seed_voice=req.seed_voice,
-    )
-    return ScriptInfo(name=name, path=str(path), rows=rows, persona_name=persona.name)
 
 
 @router.get("/api/datasets", response_model=list[ScriptInfo])

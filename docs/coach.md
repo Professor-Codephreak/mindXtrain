@@ -137,6 +137,34 @@ utterances without blocking the event loop on inference. `mindxtrain imprint
 `MINDXTRAIN_API_BASE_URL` `/v1/dream/ingest`, else a `data/incoming/` inbox drop under
 `MINDXTRAIN_MINDX_HOME`) — clean-room, an artifact pointer, never mindX code.
 
+## Create script — personas + skills
+
+The **Create script** card authors a `source: local` JSONL from a persona and toggleable
+skills:
+
+- **Built-in personas** (`GET /coach/api/personas`) — `codephreak`, `assistant`, `mentor`
+  (`mindxtrain.data.personas.BUILTIN_PERSONAS`). Pick one, or use the custom fields.
+- **Skills** — toggle **Software Engineer / Platform Architect / Bash / Solidity** to mix
+  each skill's in-domain exchanges into the script (`mindxtrain.data.personas.SKILLS`,
+  `compose(persona, skills)`). A skill is a system-prompt addendum + representative turns.
+- `POST /coach/api/datasets` composes persona + skills + your exchanges and returns the row
+  count plus **training params auto-derived from the dataset size**
+  (`derive_training_params` — small scripts overfit to imprint: more epochs, grad_accum 1).
+
+## Build an Ollama Modelfile (separate window)
+
+The **Build Modelfile…** button (in the train card's push-to-ollama row) opens a standalone
+builder at `/coach/modelfile` (a separate browser window), pre-filled for the current run:
+
+- Every instruction is a toggle: `FROM` (required), `SYSTEM`, `TEMPLATE`, `ADAPTER`,
+  `LICENSE`, `REQUIRES`, plus `MESSAGE` examples and `stop` sequences.
+- Every `PARAMETER` (`num_ctx`, `temperature`, `top_k`, `top_p`, `min_p`, `repeat_penalty`,
+  `mirostat`, `seed`, … — the full catalogue from `GET /coach/api/modelfile/params`) is a
+  toggle + input, rendered dynamically with defaults and ranges.
+- `POST /coach/api/modelfile/build` renders the `Modelfile` text;
+  `POST /coach/api/modelfile/create` runs `ollama create <tag>`. Core logic:
+  `mindxtrain.deploy.modelfile` (`ModelfileSpec`, `render_modelfile`, `create_model`).
+
 ## The core storyboard
 
 The original CPU-only demo path, top-to-bottom (the cards above and below it —

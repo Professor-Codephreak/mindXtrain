@@ -1111,6 +1111,22 @@ async function cancelTrain() {
   }
 }
 
+function openModelfileBuilder() {
+  // Open the standalone Modelfile builder in a separate window, pre-filled for
+  // the current run when available (adapter = its checkpoint, tag = recipe).
+  const params = new URLSearchParams();
+  const run = state.run;
+  if (run) {
+    if (run.out_dir) params.set("adapter", `${run.out_dir}/checkpoint`);
+    const tag = ($("#ollama-push-tag") && $("#ollama-push-tag").value.trim()) || run.recipe || "";
+    if (tag) params.set("tag", tag);
+  }
+  if (state.chatBackendModel) params.set("from", state.chatBackendModel);
+  const qs = params.toString();
+  window.open(`/coach/modelfile${qs ? "?" + qs : ""}`, "mindxtrain-modelfile",
+    "width=960,height=900,scrollbars=yes,resizable=yes");
+}
+
 async function pushTrainedRunToOllama() {
   if (!state.run) return;
   const btn = $("#push-to-ollama-btn");
@@ -1731,24 +1747,59 @@ async function seedFromPersona() {
   }
 }
 
+async function loadPersonasAndSkills() {
+  const sel = $("#ds-persona");
+  const skillsHost = $("#ds-skills");
+  let body = { personas: [], skills: [] };
+  try { body = await getJSON("/coach/api/personas"); } catch (e) { /* offline */ }
+  if (sel) {
+    sel.innerHTML = '<option value="">(custom — use fields below)</option>';
+    for (const p of body.personas) {
+      const o = document.createElement("option");
+      o.value = p.name; o.textContent = p.label;
+      sel.appendChild(o);
+    }
+  }
+  if (skillsHost) {
+    skillsHost.innerHTML = "";
+    for (const s of body.skills) {
+      const lab = document.createElement("label");
+      lab.innerHTML = `<input type="checkbox" class="ds-skill" value="${s.name}"> ${s.label}`;
+      lab.title = s.addendum;
+      skillsHost.appendChild(lab);
+    }
+  }
+}
+
+function _selectedSkills() {
+  return Array.from(document.querySelectorAll(".ds-skill:checked")).map((c) => c.value);
+}
+
 async function saveScript() {
   const status = $("#ds-status");
+  const skills = _selectedSkills();
+  const persona = ($("#ds-persona") && $("#ds-persona").value) || "";
   const body = {
     name: $("#ds-name").value.trim() || "script",
+    persona,
     persona_name: $("#ds-persona-name").value.trim() || "actor",
     system_prompt: $("#ds-system").value.trim(),
     voice_examples: _linesToList($("#ds-voice").value),
     exchanges: _parseExchanges($("#ds-exchanges").value),
+    skills,
     seed_voice: $("#ds-seed-voice").checked,
   };
-  if (!body.exchanges.length && !(body.seed_voice && body.voice_examples.length)) {
-    status.textContent = "add at least one exchange (user ::: assistant) or a voice example";
+  if (!persona && !skills.length && !body.exchanges.length &&
+      !(body.seed_voice && body.voice_examples.length)) {
+    status.textContent = "pick a persona/skill, add an exchange, or a voice example";
     return;
   }
   status.textContent = "saving…";
   try {
     const info = await postJSON("/coach/api/datasets", body);
-    status.textContent = `✓ ${info.rows} rows → ${info.path} — set this as data.path`;
+    const tp = info.train_params || {};
+    status.textContent = `✓ ${info.rows} rows → ${info.path}` +
+      (tp.epochs ? ` · suggested: ${tp.epochs} epochs, grad_accum ${tp.grad_accum}` : "");
     refreshDatasets();
   } catch (e) {
     status.textContent = `save failed: ${e}`;
@@ -1778,6 +1829,7 @@ function wireCreateDataset() {
   const seed = $("#ds-seed-persona");
   if (save) save.addEventListener("click", saveScript);
   if (seed) seed.addEventListener("click", seedFromPersona);
+  loadPersonasAndSkills();
   refreshDatasets();
 }
 
@@ -1996,6 +2048,8 @@ window.addEventListener("DOMContentLoaded", () => {
   $("#cancel-train").addEventListener("click", cancelTrain);
   const pushBtn = $("#push-to-ollama-btn");
   if (pushBtn) pushBtn.addEventListener("click", pushTrainedRunToOllama);
+  const mfBtn = $("#open-modelfile-btn");
+  if (mfBtn) mfBtn.addEventListener("click", openModelfileBuilder);
   $("#run-cost").addEventListener("click", runCost);
   $("#chat-send").addEventListener("click", sendChat);
   const chatRecheck = $("#chat-recheck");

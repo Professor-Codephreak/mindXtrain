@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ollama Modelfile builder — mindXtrain</title>
+  <link rel="stylesheet" href="/coach/static/style.css">
+  <style>
+    body { max-width: 920px; margin: 0 auto; padding: 1.5rem; }
+    .mf-section { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    .mf-section > h3 { margin: 0 0 0.6rem; font-size: 0.95rem; }
+    .mf-row { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.6rem; }
+    .mf-row textarea, .mf-row input[type=text] { width: 100%; background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; font-family: inherit; }
+    .mf-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.4rem; }
+    .mf-param { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+    .mf-param input[type=number], .mf-param input[type=text] { width: 6rem; background: var(--bg);
+      color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.4rem; }
+    .mf-param .mf-desc { color: var(--muted); font-size: 0.75rem; }
+    .mf-toggle-field[hidden] { display: none; }
+    pre.code { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Ollama <span class="muted">Modelfile</span> builder</h1>
+  <p class="lede">Toggle the instructions + parameters you want, fill the fields, and build a valid
+    <code>Modelfile</code> (<a href="https://docs.ollama.com/modelfile" target="_blank" rel="noopener">spec</a>).
+    Opened from the Coach &mdash; pre-filled when launched for a trained checkpoint.</p>
+
+  <div class="mf-section">
+    <h3>FROM <span class="hint">(required)</span></h3>
+    <div class="mf-row"><input id="mf-from" type="text" placeholder="qwen3:0.6b  or  ./out/runs/&lt;run&gt;/checkpoint"></div>
+  </div>
+
+  <div class="mf-section">
+    <h3>Instructions</h3>
+    <div id="mf-instructions"></div>
+  </div>
+
+  <div class="mf-section">
+    <h3>PARAMETER <span class="hint">(toggle on to include)</span></h3>
+    <div id="mf-params" class="mf-params"></div>
+  </div>
+
+  <div class="mf-section">
+    <h3>stop sequences <span class="hint">(one per line)</span></h3>
+    <div class="mf-row"><textarea id="mf-stop" rows="2" placeholder="&lt;|im_end|&gt;&#10;User:"></textarea></div>
+  </div>
+
+  <div class="mf-section">
+    <h3>MESSAGE examples <span class="hint">(one per line: <code>role: content</code> — role = system/user/assistant)</span></h3>
+    <div class="mf-row"><textarea id="mf-messages" rows="3" placeholder="user: who are you?&#10;assistant: i am codephreak."></textarea></div>
+  </div>
+
+  <div class="train-controls">
+    <button id="mf-build">Build Modelfile</button>
+    <button id="mf-copy" class="link-button" type="button">Copy</button>
+    <span id="mf-status" class="hint"></span>
+  </div>
+  <pre id="mf-output" class="code" hidden></pre>
+
+  <div class="mf-section">
+    <h3>Create in ollama</h3>
+    <div class="train-controls">
+      <label>tag <input id="mf-tag" type="text" placeholder="codephreak-135m" style="width:16rem"></label>
+      <button id="mf-create">ollama create</button>
+      <span id="mf-create-status" class="hint"></span>
+    </div>
+  </div>
+
+  <script src="/coach/static/modelfile.js"></script>
+</body>
+</html>

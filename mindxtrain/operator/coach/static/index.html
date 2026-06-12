@@ -161,6 +161,9 @@
       <div class="dataset-form">
         <label>name <input id="ds-name" type="text" placeholder="codephreak" style="width:14rem"></label>
         <button id="ds-seed-persona" class="link-button" type="button">Seed from persona</button>
+        <label>persona <select id="ds-persona" title="built-in persona (or custom below)"></select></label>
+        <label>skills <span class="hint">(toggle to mix in in-domain training)</span></label>
+        <div id="ds-skills" class="train-controls"></div>
         <label>persona name <input id="ds-persona-name" type="text" placeholder="Codephreak" style="width:14rem"></label>
         <label>system prompt
           <textarea id="ds-system" rows="2" placeholder="You are Codephreak, augmentic intelligence orchestrator."></textarea>
@@ -339,6 +342,7 @@
           <label>tag <input id="ollama-push-tag" type="text"
             placeholder="(defaults to recipe name)" style="width:18rem"></label>
           <button id="push-to-ollama-btn">Push to ollama</button>
+          <button id="open-modelfile-btn" type="button">Build Modelfile&hellip;</button>
           <span id="push-to-ollama-status" class="hint"></span>
         </div>
         <div class="train-controls">

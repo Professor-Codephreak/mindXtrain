@@ -154,6 +154,27 @@ def write_script_jsonl(rows: list[dict], out_path: str | Path) -> Path:
     return out
 
 
+def derive_training_params(num_rows: int) -> dict[str, int]:
+    """Derive CPU-imprint training params from the dataset size.
+
+    A small persona/skill script must *overfit* to imprint (many epochs, grad_accum 1
+    so a few-row script still does many optimizer steps); larger datasets taper toward
+    ordinary SFT. Returns `{epochs, grad_accum, per_device}` the imprint lane can apply.
+    """
+    n = max(1, num_rows)
+    if n <= 8:
+        epochs, grad_accum = 24, 1
+    elif n <= 32:
+        epochs, grad_accum = 16, 1
+    elif n <= 128:
+        epochs, grad_accum = 8, 1
+    elif n <= 512:
+        epochs, grad_accum = 4, 2
+    else:
+        epochs, grad_accum = 2, 4
+    return {"epochs": epochs, "grad_accum": grad_accum, "per_device": 1}
+
+
 def author_script(
     *,
     out_path: str | Path,
@@ -178,6 +199,7 @@ __all__ = [
     "Persona",
     "author_script",
     "build_script_rows",
+    "derive_training_params",
     "load_persona",
     "persona_from_dict",
     "persona_system_prompt",

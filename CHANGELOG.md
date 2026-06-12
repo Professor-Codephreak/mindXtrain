@@ -8,6 +8,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Ollama Modelfile builder** (`mindxtrain.deploy.modelfile`) — render a valid
+  `Modelfile` from a typed `ModelfileSpec` (every instruction: FROM/SYSTEM/TEMPLATE/
+  ADAPTER/LICENSE/MESSAGE/REQUIRES + the full PARAMETER catalogue). A standalone Coach
+  window at `/coach/modelfile` exposes a toggle + input for every instruction and
+  parameter; `POST /coach/api/modelfile/{build,create}` render it and run `ollama create`.
+- **Default personas + skills** (`mindxtrain.data.personas`) — built-in personas
+  (codephreak / assistant / mentor) and toggleable **skills** (software engineer, platform
+  architect, bash, solidity) that mix in-domain exchanges into a script. The Create-script
+  card gains a persona picker + skill toggles; `derive_training_params` auto-tunes CPU
+  imprint epochs/grad_accum from the dataset size.
+
 - **Governance layer** (`mindxtrain.governance`) — classroom / boardroom / dojo,
   a clean-room reimplementation of openmindx/openmind's Boardroom-consensus +
   Dojo-evaluation behaviour. The **classroom** graduates an actor on its imprint;
