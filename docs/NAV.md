@@ -7,7 +7,7 @@ Start at [Quickstart](quickstart.md); operators running the demo read [HANDOFF.m
 ## Getting started
 
 - [Quickstart](quickstart.md) — install (with optional-dep groups), init, bench, train.
-- [HANDOFF.md](HANDOFF.md) — **operator checklist**: local setup → MI300X provision → train/eval/quantize → publish → contracts → submission.
+- [HANDOFF.md](HANDOFF.md) — **operator checklist**: local setup → MI300X provision → train/eval/quantize → publish → contracts → deploy.
 
 ## Architecture & invariants
 
@@ -35,11 +35,6 @@ Start at [Quickstart](quickstart.md); operators running the demo read [HANDOFF.m
 - [Benchmarks](benchmarks.md) — target metrics + framework comparison.
 - [CHANGELOG](CHANGELOG.md) — version history (current: v1.0.0).
 - [LICENSE-NOTICE](LICENSE-NOTICE.md) — Apache-2.0 + MIT-compatibility statement.
-
-## Hackathon
-
-- [Hackathon submission tracker](hackathon_submission.md) — judging-criteria mapping, video script, deck outline.
-- [HACKATHON.md](HACKATHON.md) — daily verification gates.
 
 ## Source briefs (`blueprints/`)
 

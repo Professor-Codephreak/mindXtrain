@@ -178,7 +178,7 @@ preflight, hardware, dream-corpus, live training, receipt, MEI, deploy — flank
 6. **Cost vs H100** — sliders for GPUs and hours; emits a three-row comparison table (MI300X / H100 / H200) with a headline like "MI300X is 5.4× cheaper than the H100 baseline".
 7. **Try the model** — chat panel that proxies to `/v1/chat/completions`. Stays disabled and explains why until the backend reports ready; a **Check now** button re-probes on demand.
 
-## Demo storyboard for the 5-min hackathon video
+## Demo storyboard
 
 ```
 0:00–0:30  open localhost:8080, point at the three-stage diagram in the header

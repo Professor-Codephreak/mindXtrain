@@ -83,7 +83,7 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 ├── docs/                         # all documentation (index: docs/NAV.md)
 │   ├── NAV.md                    # docs index
 │   ├── HANDOFF.md                # operator checklist
-│   ├── HACKATHON.md              # daily verification gates
+│   ├── dcoach.md                 # the proof loop + decentralized fit
 │   ├── CHANGELOG.md
 │   └── …                         # architecture, coach, governance, decentralized, reference
 ├── mindxtrain/                   # the package — 12 subpackages, ~99 modules

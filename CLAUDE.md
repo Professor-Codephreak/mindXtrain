@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `mindxtrain` is a single-package Python training framework for fine-tuning open-weight LLMs on AMD MI300X and serving them through an OpenAI-compatible API. The architectural differentiator is a **60-second AOT autotune probe** (`mindxtrain bench`) that fixes attention backend (CK vs Triton), GEMM heuristic, and RCCL config at training start — **JIT autotune is forbidden in the production training loop**.
 
-Built for the AMD × lablab.ai hackathon (May 4–10 2026). The base install is CPU-only and runs the CLI, Coach UI, `bench --dry-run`, manifest verify, and the operator FastAPI; heavyweight paths gate on opt-in dep groups.
+The base install is CPU-only and runs the CLI, Coach UI, `bench --dry-run`, manifest verify, and the operator FastAPI; heavyweight paths gate on opt-in dep groups.
 
 ## Commands
 

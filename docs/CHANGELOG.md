@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Removed hackathon framing from the public surfaces.** README, `pyproject.toml`
+  description, the package docstring, `CLAUDE.md`, and the active docs (autotune /
+  architecture / development / coach / yaml_schema / HANDOFF / NAV) no longer frame
+  mindXtrain as a hackathon submission; deleted `docs/HACKATHON.md` and
+  `docs/hackathon_submission.md`. The frozen `docs/blueprints/` and dated dev-blog
+  posts are preserved unchanged as the historical record. README now leads with the
+  dcoach proof loop.
+
 ### Added
 
 - **dcoach page + prompt-tools + decentralized panel.** New `/coach/dcoach` workflow

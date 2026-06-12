@@ -1,6 +1,6 @@
 # Autotune — the 60-second AOT probe
 
-The single layer that distinguishes mindxtrain from Axolotl, LLaMA-Factory, Unsloth, torchtune, and Primus. Quoted from `docs/blueprints/mindxtrain_ Production Blueprint*.md` §"How the hackathon actually scores":
+The single layer that distinguishes mindxtrain from Axolotl, LLaMA-Factory, Unsloth, torchtune, and Primus. Quoted from the frozen design brief in `docs/blueprints/`:
 
 > The single most differentiating angle is the auto-selection layer. No competitor framework — not Axolotl, LLaMA-Factory, Unsloth, torchtune, or Optimum-AMD itself — runs a per-job MI300X micro-benchmark before training to pick CK vs Triton attention backends, hipBLASLt heuristic vs rocBLAS path, AITER vs reference MoE kernels, NCCL_MIN_NCHANNELS, gradient-checkpointing strategy, FSDP shard width, and LoRA rank against the actual (model, dataset shape, sequence length, GPU count) tuple. mindxtrain owns that AOT-only autotune layer.
 
@@ -50,7 +50,7 @@ output: AttentionBackend ∈ {ck, triton}, list[ProbeTiming]
 
 Per the user-confirmed Day-1 plan ("1 real probe + 2 hardcoded heuristics"), this returns `hipblaslt_default` for gfx942 based on AMD's documented MI300X tuning guidance. Reference: AMD ROCm 7.2.1 release notes, hipBLASLt 0.10 default heuristics are within 5 % of hand-tuned for the BF16/FP16 GEMMs mindxtrain hits (LoRA rank 16-64, hidden 2048-8192).
 
-**Why we don't enumerate.** A real hipBLASLt heuristic enumeration is ~1.5 minutes and risks burning the entire 60-second budget. If MMLU eval shows GEMM-bound throughput regression on a specific recipe, revisit post-hackathon.
+**Why we don't enumerate.** A real hipBLASLt heuristic enumeration is ~1.5 minutes and risks burning the entire 60-second budget. If MMLU eval shows GEMM-bound throughput regression on a specific recipe, revisit later.
 
 Output: `hipblaslt_default | hipblaslt_tuned | rocblas_fallback`.
 

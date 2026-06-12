@@ -174,7 +174,7 @@ Unknown `kind` raises `ValidationError` (tested in `tests/test_config_schema.py:
 | `bankon`      | `BankonPublishCfg`         | `{ ens_parent, subname }`.                                       |
 | `billing`     | `BillingPublishCfg`        | `{ x402: { network, asset, receiver_via, price_per_1k_tokens } }`.|
 
-`publish.billing.x402.network` is `algorand | base | base-sepolia`. The hackathon defaults are `algorand` + `USDC` ASA `203977300`.
+`publish.billing.x402.network` is `algorand | base | base-sepolia`. The defaults are `algorand` + `USDC` ASA `203977300`.
 
 ## `receipt`
 

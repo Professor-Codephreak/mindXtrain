@@ -10,10 +10,11 @@ LLaMA-Factory, Unsloth, torchtune and Primus is its **60-second AOT autotune
 probe**: CK-vs-Triton attention, hipBLASLt heuristic, RCCL config — the plan
 is fixed at training start, JIT autotune is forbidden in the production loop.
 
-**Status**: production deployment in progress. 207/207 tests pass, ruff clean.
-~38 modules ship as real Python on a CPU-only laptop; heavyweight training,
-eval, and quantization paths gate on opt-in extra dep groups. See
-[`docs/actualization_status.md`](docs/actualization_status.md) for the
+**Status**: production deployment in progress. The CPU-only base install passes
+its full pytest suite (ruff + mypy clean); with the training extras installed the
+suite is 672 green. Many modules ship as real Python on a CPU-only laptop;
+heavyweight training, eval, and quantization paths gate on opt-in extra dep
+groups. See [`docs/actualization_status.md`](docs/actualization_status.md) for the
 per-module map and [`HANDOFF.md`](docs/HANDOFF.md) for the operator checklist.
 
 ## Where this runs
@@ -25,9 +26,15 @@ per-module map and [`HANDOFF.md`](docs/HANDOFF.md) for the operator checklist.
   data; this framework consumes it via the `mindx_dreams` data source and
   fine-tunes a small fallback model on a single MI300X.
 
-The AMD × lablab.ai hackathon (May 4–10 2026) historical notes live in
-[`HACKATHON.md`](docs/HACKATHON.md); [`docs/NAV.md`](docs/NAV.md) is the full
-documentation hub.
+## Prove it trains
+
+mindXtrain doesn't just assert that training works — it proves recall. The
+[**dcoach**](docs/dcoach.md) proof loop (`/coach/dcoach`) imprints a persona onto a
+tiny model on CPU, then measures whether the model *recalls* it: the **classroom**
+scores recall before vs after training, the **boardroom** rules success or failure,
+and the verdict feeds an **autotune feedback loop** that tunes the next run. A clean
+CPU run reports a positive imprint Δ (e.g. recall 0.07 → 0.28) and an approved
+verdict. [`docs/NAV.md`](docs/NAV.md) is the full documentation hub.
 
 ## Quickstart
 
@@ -70,16 +77,16 @@ scripts/          dev helpers
 
 | Doc | What it covers |
 |-----|----------------|
-| [`HANDOFF.md`](docs/HANDOFF.md) | **Operator checklist** — 11 ordered steps from local setup to submission. |
+| [`HANDOFF.md`](docs/HANDOFF.md) | **Operator checklist** — ordered steps from local setup to live deployment. |
 | [`docs/quickstart.md`](docs/quickstart.md) | Install + base-vs-extras command tour. |
 | [`docs/architecture.md`](docs/architecture.md) | Canonical layout + 5-layer architecture + MI300X invariants. |
 | [`docs/actualization_status.md`](docs/actualization_status.md) | Per-module map of what's real vs. requires extras. |
-| [`docs/autotune.md`](docs/autotune.md) | The 60-second AOT probe — the hackathon differentiator. |
+| [`docs/autotune.md`](docs/autotune.md) | The 60-second AOT probe — the architectural differentiator. |
 | [`docs/coach.md`](docs/coach.md) | Interactive `/coach/` web UI bundled in the operator. |
+| [`docs/dcoach.md`](docs/dcoach.md) | The dcoach proof loop — prove a CPU model recalls its training; decentralized-training fit. |
 | [`docs/cli.md`](docs/cli.md) | Every `mindxtrain` verb with synopsis, options, exit codes. |
 | [`docs/yaml_schema.md`](docs/yaml_schema.md) | Every field of the 10-section `XTrainConfig`. |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Target metrics + the 7-cell framework comparison. |
-| [`docs/hackathon_submission.md`](docs/hackathon_submission.md) | Title/desc/tracks/video/deck + risks & mitigations. |
 | [`docs/development.md`](docs/development.md) | Toolchain, optional-deps, lazy-import pattern, invariants. |
 | [`docs/blueprints/`](docs/blueprints/) | Source design briefs (frozen specification). |
 

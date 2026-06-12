@@ -35,7 +35,7 @@ uv run mindxtrain --help   # all 9 verbs listed
 | `LIGHTHOUSE_API_KEY` | https://files.lighthouse.storage/dashboard/apikey |
 | `MINDXTRAIN_OPENAI_API_KEY` | optional; only if you want to use openai_compat backend |
 
-> **Defer for post-hackathon:** `MINDXTRAIN_REGISTRY_ADDR` (ERC-8004 contract),
+> **Optional (on-chain anchors):** `MINDXTRAIN_REGISTRY_ADDR` (ERC-8004 contract),
 > `MINDXTRAIN_FACILITATOR_URL` (x402 facilitator). The publish path skips
 > these gracefully if unset.
 
@@ -196,9 +196,9 @@ mindxtrain publish run.yaml --manifest ./out/runs/<run_name>/manifest.json
 If `LIGHTHOUSE_API_KEY` is unset, the pin step skips gracefully and the
 manifest gets a `cid://stub-…` placeholder.
 
-## 8. Deploy contracts (optional, post-hackathon)
+## 8. Deploy contracts (optional)
 
-The demo can ship without on-chain anchors. Do these once, post-hackathon:
+The demo can ship without on-chain anchors. Do these once, when ready:
 
 ```bash
 cd contracts
@@ -216,10 +216,8 @@ can anchor the manifest BLAKE3 on-chain.
 
 ## 9. Serve the model + wire the production URL
 
-The production URL post-hackathon is `https://mindx.pythai.net` — the Coach
-UI is at `/coach/` and the public training-jobs API is at `/v1/training/jobs`.
-The hackathon-era `/hackathon` prefix is preserved in `HACKATHON.md` and the
-build-in-public posts but is no longer the canonical entry point.
+The production URL is `https://mindx.pythai.net` — the Coach UI is at `/coach/`
+and the public training-jobs API is at `/v1/training/jobs`.
 
 ```bash
 # Inside the rocm/vllm-dev container:
@@ -243,13 +241,13 @@ curl -X POST http://localhost:8080/v1/training/jobs \
 Once the proxy is live, `curl https://mindx.pythai.net/coach/api/health`
 returns 200 from the public internet.
 
-## 10. Hackathon submission
+## 10. Publish & demo
 
 ```bash
 # Push code:
 git push origin main
 
-# Record demo video (5 min, ≤ 300 MB):
+# End-to-end demo walk-through:
 #   1. mindxtrain init  → show CLI verbs
 #   2. mindxtrain bench → 60-second autotune (the differentiator)
 #   3. mindxtrain train → timelapse of training
@@ -257,16 +255,7 @@ git push origin main
 #   5. curl /v1/chat/completions → live inference
 #   6. mindxtrain receipt → BLAKE3 reverify
 #   7. Open /coach/ → click through the UI
-
-# Submit at lablab.ai:
-#   - Title: ≤ 50 chars
-#   - Description: ≤ 255 chars
-#   - Tracks: AI Agents & Agentic Workflows, Fine-Tuning on AMD GPUs
-#   - GitHub: link to your public fork
-#   - Video: HF Spaces or YouTube unlisted
-#   - Demo URL: mindx.pythai.net/hackathon (or static fallback if credit ran out)
-
-# Travel: SF on May 9. On-site finale May 10.
+#   8. Open /coach/dcoach → Imprint & Prove (CPU recall proof)
 ```
 
 ## 11. Quality gates (run before every push)
@@ -282,7 +271,7 @@ All three must pass before pushing to `main`. CI runs the same gates on the
 
 ---
 
-## What's still TODO (post-hackathon)
+## What's still TODO
 
 These paths are wired but require runtime/contracts/services to actually
 flow end-to-end:
@@ -316,7 +305,5 @@ above are paid/external services you stand up at your own pace.
 | Coach detail | `docs/coach.md` |
 | CLI reference | `docs/cli.md` |
 | YAML schema | `docs/yaml_schema.md` |
-| Submission notes | `docs/hackathon_submission.md` |
+| dcoach proof loop | `docs/dcoach.md` |
 | Frozen blueprints | `docs/blueprints/{mindXtrain,mindXtrain2}.md` |
-
-Good luck at the finale.

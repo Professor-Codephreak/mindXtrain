@@ -1,7 +1,7 @@
 [project]
 name = "mindxtrain"
 version = "1.0.0"
-description = "Production training framework for aGLM-BANKON derivatives. AMD x lablab.ai hackathon, May 4-10 2026."
+description = "Production training framework for fine-tuning open-weight LLMs on AMD MI300X and serving them through an OpenAI-compatible API."
 requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 authors = [{ name = "mindX" }]

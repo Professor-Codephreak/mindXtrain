@@ -148,7 +148,7 @@ preset modules auto-register on import so `mindxtrain init` and the
 The framework ships with **38 modules actualized** as real Python on a
 CPU-only laptop, **6 optional-dep groups** (`ml`, `eval`, `data`, `serve`,
 `chain`, `obs`) for the heavyweight paths, and **5 cloud-provider stubs**
-preserved in `budget/providers/*` for post-hackathon work. Per-module map at
+preserved in `budget/providers/*` for future work. Per-module map at
 [actualization_status.md](actualization_status.md).
 
 Verification gate that should always pass on the base install:
