@@ -102,6 +102,16 @@ def test_dojo_settle_missing_vote_422():
     assert r.status_code == 422
 
 
+def test_models_endpoint_shape():
+    # Returns 200 with the backend base_url + a (possibly empty) model list,
+    # whether or not a chat backend is reachable.
+    r = client.get("/coach/api/models")
+    assert r.status_code == 200
+    body = r.json()
+    assert "base_url" in body
+    assert isinstance(body["models"], list)
+
+
 def test_coach_index_has_boardroom_card():
     r = client.get("/coach/")
     assert r.status_code == 200
@@ -116,3 +126,6 @@ def test_coach_js_wires_boardroom():
     assert "wireBoardroom" in r.text
     assert "/coach/api/boardroom/convene" in r.text
     assert "/coach/api/dojo/settle" in r.text
+    # Model dropdown is populated from the live backend.
+    assert "loadBoardroomModels" in r.text
+    assert "/coach/api/models" in r.text

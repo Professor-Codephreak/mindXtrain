@@ -129,6 +129,11 @@ def deliberate(
         f"exactly 'VERDICT: <{verdicts}>'."
     )
     model = member.model or default_model
+    # Reasoning ("thinking") models spend tokens before the verdict — give enough
+    # room and time by default so the `VERDICT:` line is actually reached (concurrent
+    # members also queue inside a single-GPU backend). Callers can override.
+    chat_kw.setdefault("max_tokens", 512)
+    chat_kw.setdefault("timeout_s", 180.0)
     try:
         text = chat_once(
             model,

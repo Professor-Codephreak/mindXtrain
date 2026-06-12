@@ -1801,6 +1801,30 @@ async function loadBoardroomPresets() {
   } catch (e) { /* presets unavailable; leave empty */ }
 }
 
+async function loadBoardroomModels() {
+  const sel = $("#br-model");
+  if (!sel) return;
+  let models = [];
+  try {
+    const body = await getJSON("/coach/api/models");
+    models = body.models || [];
+  } catch (e) { /* backend unreachable */ }
+  sel.innerHTML = "";
+  if (!models.length) {
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "(no backend models — start ollama)";
+    sel.appendChild(o);
+    return;
+  }
+  // Prefer a small local (non-cloud) model first.
+  models.sort((a, b) => (a.includes(":cloud") ? 1 : 0) - (b.includes(":cloud") ? 1 : 0));
+  for (const id of models) {
+    const o = document.createElement("option");
+    o.value = id; o.textContent = id;
+    sel.appendChild(o);
+  }
+}
+
 function _boardMembers() {
   const sel = $("#br-preset");
   const opt = sel && sel.selectedOptions[0];
@@ -1869,6 +1893,7 @@ function wireBoardroom() {
   if (convene) convene.addEventListener("click", conveneBoardroom);
   if (settle) settle.addEventListener("click", settleDojo);
   loadBoardroomPresets();
+  loadBoardroomModels();
 }
 
 async function refreshMEIHistory() {

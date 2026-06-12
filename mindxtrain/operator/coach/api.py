@@ -606,6 +606,27 @@ async def api_boardroom_presets() -> dict[str, list[str]]:
     return {name: list(roles) for name, roles in PRESET_BOARDS.items()}
 
 
+@router.get("/api/models")
+async def api_models() -> dict[str, Any]:
+    """Model ids the configured chat backend exposes, so the Boardroom card can
+    pick a model that's actually installed (best-effort; `[]` if unreachable)."""
+    import httpx
+
+    from mindxtrain.governance.panel import resolve_chat_base_url
+
+    base = resolve_chat_base_url()
+    models: list[str] = []
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            resp = client.get(f"{base}/models")
+            resp.raise_for_status()
+            data = resp.json()
+        models = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
+    except (httpx.HTTPError, OSError, ValueError):
+        models = []
+    return {"base_url": base, "models": models}
+
+
 @router.post("/api/boardroom/convene")
 async def api_boardroom_convene(req: ConveneRequest) -> dict[str, Any]:
     """Convene a boardroom on a motion. Tally supplied `votes`, or `use_models`
