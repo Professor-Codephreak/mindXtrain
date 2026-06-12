@@ -27,9 +27,16 @@ class ProvenanceHashes(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config_yaml: str = Field(description="BLAKE3 of the XTrainConfig YAML")
-    dataset: str = Field(description="BLAKE3 of the dataset shard manifest")
     checkpoint: str = Field(description="BLAKE3 of the checkpoint directory")
-    eval_json: str = Field(description="BLAKE3 of the lm-eval-harness output JSON")
+    # Optional artifacts: a CPU `trl_cpu` run produces only a checkpoint, so the
+    # dataset manifest and eval JSON may be absent. An empty hash means "artifact
+    # not produced" and is treated as a pass (nothing to verify) by verify_receipt.
+    dataset: str = Field(default="", description="BLAKE3 of the dataset shard manifest")
+    eval_json: str = Field(default="", description="BLAKE3 of the lm-eval-harness output JSON")
+    # BLAKE3 of the frozen AutotunePlan JSON. Binding the plan hash to the
+    # checkpoint is what makes a run "natively verifiable" — it proves which
+    # AOT-fixed backend/heuristic/RCCL config produced these weights.
+    autotune_plan: str = Field(default="", description="BLAKE3 of the frozen AutotunePlan JSON")
 
 
 class INFTPointer(BaseModel):
@@ -146,6 +153,87 @@ def emit_receipt(
         blake3=hashes,
         time_attestation=_fetch_time_attestation(),
     )
+
+
+CONFIG_SNAPSHOT_NAME = "config.snapshot.yaml"
+PLAN_SNAPSHOT_NAME = "autotune_plan.json"
+
+
+def write_config_snapshot(cfg: object, run_dir: Path) -> Path:
+    """Serialize the validated config to `run_dir/config.snapshot.yaml`.
+
+    Deterministic (sorted keys) so re-hashing the same config yields the same
+    digest across machines. Returns the snapshot path.
+    """
+    import yaml
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = run_dir / CONFIG_SNAPSHOT_NAME
+    payload = cfg.model_dump(mode="json")  # type: ignore[attr-defined]
+    snapshot.write_text(yaml.safe_dump(payload, sort_keys=True))
+    return snapshot
+
+
+def write_plan_snapshot(plan: object, run_dir: Path) -> Path:
+    """Persist the exact AutotunePlan JSON bytes that get hashed into the receipt.
+
+    Re-verification reads these bytes back rather than re-deriving the plan, so
+    the receipt proves the plan that actually drove the run.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    snapshot = run_dir / PLAN_SNAPSHOT_NAME
+    snapshot.write_text(plan.model_dump_json(indent=2))  # type: ignore[attr-defined]
+    return snapshot
+
+
+def emit_receipt_for_run(
+    cfg: object,
+    run_id: str,
+    *,
+    run_dir: Path,
+    plan: object,
+    git_sha: str = "",
+    rocm_version: str = "7.2.1",
+) -> Manifest:
+    """Build a Manifest for a completed run, hashing whatever artifacts exist.
+
+    Unlike `emit_receipt`, this is tolerant of the CPU `trl_cpu` lane, which writes
+    only `run_dir/checkpoint/`. It snapshots the config and the frozen AutotunePlan
+    into `run_dir`, always hashes config + checkpoint + plan, and conditionally
+    hashes `dataset_manifest.json` / `eval/lm_eval.json` only when present.
+    """
+    config_snapshot = write_config_snapshot(cfg, run_dir)
+    plan_snapshot = write_plan_snapshot(plan, run_dir)
+
+    dataset_path = run_dir / "dataset_manifest.json"
+    eval_path = run_dir / "eval" / "lm_eval.json"
+    checkpoint_dir = run_dir / "checkpoint"
+
+    hashes = ProvenanceHashes(
+        config_yaml=blake3_file(config_snapshot),
+        checkpoint=blake3_dir(checkpoint_dir),
+        autotune_plan=blake3_file(plan_snapshot),
+        dataset=blake3_file(dataset_path) if dataset_path.is_file() else "",
+        eval_json=blake3_file(eval_path) if eval_path.is_file() else "",
+    )
+    return Manifest(
+        run_id=run_id,
+        owner=cfg.meta.project,  # type: ignore[attr-defined]
+        base_model=cfg.model.name,  # type: ignore[attr-defined]
+        rocm_version=rocm_version,
+        gfx_arch=cfg.hardware.gfx_arch,  # type: ignore[attr-defined]
+        git_sha=git_sha,
+        blake3=hashes,
+        time_attestation=_fetch_time_attestation(),
+    )
+
+
+def write_run_manifest(manifest: Manifest, run_dir: Path) -> Path:
+    """Write `manifest.json` into the run directory and return its path."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "manifest.json"
+    out.write_text(manifest.model_dump_json(indent=2))
+    return out
 
 
 def _fetch_time_attestation() -> TimeAttestation:

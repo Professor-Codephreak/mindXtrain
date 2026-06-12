@@ -145,6 +145,41 @@
       <p id="corpus-note" class="hint" hidden></p>
     </section>
 
+    <section id="step-create-dataset" class="card" data-step-id="step-create-dataset">
+      <header>
+        <h2><span class="step">&plus;</span> Create script</h2>
+        <span class="hint">a model is an actor &middot; persona + script &rarr; imprint</span>
+      </header>
+      <p class="prose">
+        Author a small <strong>script</strong> (the training examples) for an
+        <strong>actor</strong> (the model) in its <strong>persona</strong> voice.
+        Saved as <code>source: local</code> JSONL under
+        <code>out/datasets/&lt;name&gt;/script.jsonl</code> &mdash; point the
+        <code>mindx_persona_imprint_local</code> recipe&rsquo;s <code>data.path</code> at it,
+        train, then measure the imprint (recall before vs after).
+      </p>
+      <div class="dataset-form">
+        <label>name <input id="ds-name" type="text" placeholder="codephreak" style="width:14rem"></label>
+        <button id="ds-seed-persona" class="link-button" type="button">Seed from persona</button>
+        <label>persona name <input id="ds-persona-name" type="text" placeholder="Codephreak" style="width:14rem"></label>
+        <label>system prompt
+          <textarea id="ds-system" rows="2" placeholder="You are Codephreak, augmentic intelligence orchestrator."></textarea>
+        </label>
+        <label>voice examples <span class="hint">(one per line)</span>
+          <textarea id="ds-voice" rows="2" placeholder="augmentic intelligence.&#10;let's build."></textarea>
+        </label>
+        <label>exchanges <span class="hint">(one per line: <code>user ::: assistant</code>)</span>
+          <textarea id="ds-exchanges" rows="4" placeholder="who are you? ::: i am codephreak.&#10;what do you do? ::: i orchestrate autonomous agents."></textarea>
+        </label>
+        <div class="train-controls">
+          <label><input id="ds-seed-voice" type="checkbox" checked> seed rows from voice examples</label>
+          <button id="ds-save">Save script</button>
+          <span id="ds-status" class="hint"></span>
+        </div>
+        <ul id="ds-list" class="summary" hidden></ul>
+      </div>
+    </section>
+
     <section id="step-recipes" class="card" data-step-id="step-recipes">
       <header>
         <h2><span class="step">4</span> Pick a recipe</h2>
@@ -262,21 +297,31 @@
       <div id="train-charts" hidden>
         <div class="chart-wrap">
           <canvas id="loss-chart" height="180"></canvas>
+          <p id="chart-window-note" class="hint" hidden></p>
           <p id="chart-fallback" class="hint" hidden>
             Chart.js not loaded &mdash; latest loss values shown in the table below.
           </p>
         </div>
-        <table id="metrics-table">
-          <thead><tr>
-            <th>step</th><th>loss</th><th>acc</th>
-            <th>entropy</th><th>lr</th><th>grad_norm</th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
+        <details id="metrics-table-wrap">
+          <summary>
+            per-step metrics
+            <span id="metrics-table-count" class="hint">(no steps yet)</span>
+          </summary>
+          <table id="metrics-table">
+            <thead><tr>
+              <th>step</th><th>loss</th><th>acc</th>
+              <th>entropy</th><th>lr</th><th>grad_norm</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </details>
       </div>
       <div id="train-result" class="train-result" hidden></div>
       <details id="train-log-wrap" hidden>
-        <summary>train.log (live tail)</summary>
+        <summary>
+          train.log (live tail)
+          <span id="train-log-count" class="hint"></span>
+        </summary>
         <pre id="train-log" class="code log-tail"></pre>
       </details>
       <div id="push-to-ollama-wrap" hidden>
@@ -304,6 +349,29 @@
           <span class="hint">PATCH /v1/config/fallback-model · best-effort</span>
         </div>
       </div>
+    </section>
+
+    <section id="step-receipt" class="card" data-step-id="step-receipt">
+      <header>
+        <h2><span class="step">&check;</span> Verifiable receipt</h2>
+        <span class="badge-status" id="receipt-badge" hidden></span>
+      </header>
+      <p class="prose">
+        The AOT-only discipline is a verification primitive: binding the frozen
+        AutotunePlan hash to the checkpoint hash proves <em>which</em> compiled
+        backend, GEMM heuristic and RCCL config produced these weights &mdash;
+        the bitwise-reproducibility that decentralized-training verifiers
+        (Verde&sol;RepOps) require. This re-hashes the run&rsquo;s
+        <code>manifest.json</code> against the artifacts on disk.
+      </p>
+      <div id="receipt-card-body" hidden>
+        <ul id="receipt-hashes" class="summary"></ul>
+        <p class="hint">
+          Cross-check from a shell:
+          <code>mindxtrain receipt out&sol;runs&sol;&lt;run&gt;&sol;manifest.json --config &lt;recipe&gt;.yaml</code>
+        </p>
+      </div>
+      <p class="hint" id="receipt-empty">waiting for a completed run&hellip;</p>
     </section>
 
     <section id="step-mei" class="card" data-step-id="step-mei">
@@ -423,10 +491,13 @@
       <header>
         <h2><span class="step">11</span> Try the model</h2>
         <span class="hint" id="chat-status">probing&hellip;</span>
+        <button id="chat-recheck" class="link-button" type="button">Check now</button>
       </header>
       <p class="prose" id="chat-disabled-msg">
         Chat is disabled until the inference backend reports ready.
-        Day-5 wiring boots vLLM-ROCm against the FP8-quantized checkpoint.
+        A backend comes online after <code>serve --to ollama</code> or a
+        vLLM/SGLang launch; click <em>Check now</em> to re-probe without waiting
+        for the 30 s poll.
       </p>
       <div id="chat-form" hidden>
         <textarea id="chat-input" rows="3" placeholder="Ask anything&hellip;"></textarea>

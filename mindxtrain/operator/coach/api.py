@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from collections.abc import AsyncIterator, Callable
@@ -409,6 +410,159 @@ async def api_dream_corpus(root: str | None = None) -> DreamCorpusResponse:
     )
 
 
+# ---- create dataset (author a script for an actor) ----------------------
+# A model is an actor; an actor has a persona (voice) and a script (the
+# training examples). This lets the operator author a small script in the
+# browser and save it as `source: local` JSONL the recipes can imprint from.
+
+_SAFE_NAME = re.compile(r"[^a-z0-9_-]+")
+
+
+def _datasets_root() -> Path:
+    """Where authored scripts live. Override with MINDXTRAIN_DATASETS_DIR."""
+    return Path(os.environ.get("MINDXTRAIN_DATASETS_DIR", "./out/datasets"))
+
+
+def _safe_dataset_name(name: str) -> str:
+    cleaned = _SAFE_NAME.sub("-", name.strip().lower()).strip("-")
+    return cleaned or "script"
+
+
+class ExchangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user: str
+    assistant: str
+
+
+class CreateScriptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(description="dataset name; becomes out/datasets/<name>/script.jsonl")
+    persona_name: str = "actor"
+    system_prompt: str = ""
+    voice_examples: list[str] = Field(default_factory=list)
+    exchanges: list[ExchangeIn] = Field(default_factory=list)
+    seed_voice: bool = True
+
+
+class ScriptInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    path: str
+    rows: int
+    persona_name: str
+
+
+class ScriptPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    path: str
+    rows: int
+    sample: list[dict[str, Any]]
+
+
+@router.get("/api/persona", response_model=dict)
+async def api_persona() -> dict[str, Any]:
+    """The persona Coach pre-fills the create-script form with (clean-room).
+
+    Loaded from `MINDXTRAIN_PERSONA_PATH` if set, else a minimal default. Never
+    copies mindX bytes — reads recognised fields at runtime.
+    """
+    from mindxtrain.data.scripts import load_persona
+
+    p = load_persona()
+    return {
+        "name": p.name,
+        "system_prompt": p.system_prompt,
+        "voice_examples": list(p.voice_examples),
+    }
+
+
+@router.post("/api/datasets", response_model=ScriptInfo)
+async def api_create_dataset(req: CreateScriptRequest) -> ScriptInfo:
+    """Author a script (persona + exchanges) → `source: local` JSONL on disk."""
+    from mindxtrain.data.scripts import Exchange, Persona, author_script
+
+    if not req.exchanges and not (req.seed_voice and req.voice_examples):
+        raise HTTPException(
+            status_code=422,
+            detail="provide at least one exchange or a voice example to seed.",
+        )
+    name = _safe_dataset_name(req.name)
+    out_path = _datasets_root() / name / "script.jsonl"
+    persona = Persona(
+        name=req.persona_name or "actor",
+        system_prompt=req.system_prompt,
+        voice_examples=list(req.voice_examples),
+    )
+    path, rows = author_script(
+        out_path=out_path,
+        exchanges=[Exchange(user=e.user, assistant=e.assistant) for e in req.exchanges],
+        persona=persona,
+        seed_voice=req.seed_voice,
+    )
+    return ScriptInfo(name=name, path=str(path), rows=rows, persona_name=persona.name)
+
+
+@router.get("/api/datasets", response_model=list[ScriptInfo])
+async def api_list_datasets() -> list[ScriptInfo]:
+    """List authored scripts under the datasets root (newest dirs first)."""
+    if not _datasets_root().exists():
+        return []
+    out: list[ScriptInfo] = []
+    for d in sorted(_datasets_root().iterdir(), reverse=True):
+        script = d / "script.jsonl"
+        if not script.is_file():
+            continue
+        rows = sum(1 for line in script.read_text().splitlines() if line.strip())
+        out.append(ScriptInfo(name=d.name, path=str(script), rows=rows, persona_name=""))
+    return out
+
+
+@router.get("/api/datasets/{name}", response_model=ScriptPreview)
+async def api_preview_dataset(name: str) -> ScriptPreview:
+    """Preview the first few rows of an authored script."""
+    script = _datasets_root() / _safe_dataset_name(name) / "script.jsonl"
+    if not script.is_file():
+        raise HTTPException(status_code=404, detail=f"no script for {name!r}")
+    sample: list[dict[str, Any]] = []
+    rows = 0
+    for line in script.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows += 1
+        if len(sample) < 5:
+            try:
+                sample.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return ScriptPreview(name=_safe_dataset_name(name), path=str(script), rows=rows, sample=sample)
+
+
+# ---- imprint measurement (recall before/after) --------------------------
+# Score how much an actor's utterances moved toward the persona voice after
+# training. Scoring is fast + dependency-light; the heavy generation that
+# produces the before/after utterances runs in `mindxtrain imprint` (CLI) or
+# the e2e test so the operator event loop never blocks on model inference.
+
+
+class ImprintScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    inquiries: list[str]
+    before: list[str]
+    after: list[str]
+    baseline: list[str]
+
+
+@router.post("/api/imprint/score")
+async def api_imprint_score(req: ImprintScoreRequest) -> dict[str, Any]:
+    """Score a persona imprint from supplied before/after utterances + baseline."""
+    from mindxtrain.eval.imprint import score_imprint
+
+    report = score_imprint(req.inquiries, req.before, req.after, req.baseline)
+    return report.model_dump()
+
+
 # ---- live training runs (SSE) -------------------------------------------
 
 
@@ -435,10 +589,13 @@ def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
     Tests monkey-patch the module-level `_SPAWN` to bypass the real
     subprocess and emit canned events instead.
     """
-    if cfg.train.backend == "trl_cpu":
+    if cfg.train.backend in ("trl_cpu", "trl_local"):
         import threading
 
-        from mindxtrain.train.backend_trl_cpu import run_trl_cpu
+        from mindxtrain.train.backend_trl_cpu import run_trl_cpu, run_trl_local
+
+        # trl_local auto-detects a local GPU (else CPU fallback); trl_cpu pins CPU.
+        _run_inprocess = run_trl_local if cfg.train.backend == "trl_local" else run_trl_cpu
 
         def _on_line(line: str) -> None:
             _REGISTRY.publish_threadsafe(
@@ -481,7 +638,7 @@ def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
                 _runs.StatusEvent(run_id=run.id, status="running", message="cpu lane"),
             )
             try:
-                run_trl_cpu(
+                _run_inprocess(
                     cfg, plan, run.out_dir, on_line=_on_line, on_event=_on_event,
                 )
             except Exception as exc:
@@ -491,6 +648,11 @@ def _real_spawn(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
                 )
                 _REGISTRY.close_subscribers(run.id)
                 return
+            # Bind the AutotunePlan + checkpoint hashes into a verifiable
+            # manifest before announcing success, so a UI subscriber can fetch
+            # the receipt the moment it sees `succeeded`.
+            from mindxtrain.operator.receipt_emit import emit_run_receipt
+            emit_run_receipt(_REGISTRY, run, cfg, plan)
             _REGISTRY.publish_threadsafe(
                 run.id,
                 _runs.StatusEvent(
@@ -1469,3 +1631,102 @@ async def api_mei_promote(run_id: str) -> MEIPromoteResponse:
         promoted=True,
     )
     return MEIPromoteResponse(run_id=run_id, promoted=True, reasons=[])
+
+
+# ---- Verifiable training receipt ----------------------------------------
+# The AOT-only discipline is a verification primitive: a frozen AutotunePlan
+# hash bound to the checkpoint hash proves which compiled backend/heuristic/
+# RCCL config produced these weights (cf. Verde/RepOps bitwise reproducibility).
+# This layer re-verifies the manifest emitted at run completion and surfaces a
+# "verified ✓" badge in the Coach UI.
+
+
+class ReceiptHashesView(BaseModel):
+    """Flat BLAKE3 hashes for the Coach receipt card. Empty string = artifact
+    not produced by this run (e.g. a CPU run has no dataset/eval JSON)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    config_yaml: str
+    checkpoint: str
+    autotune_plan: str
+    dataset: str
+    eval_json: str
+
+
+class ReceiptView(BaseModel):
+    """Re-verified receipt for one run, consumed directly by coach.js."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: str
+    base_model: str
+    git_sha: str
+    created_at: str
+    hashes: ReceiptHashesView
+    verified: bool
+    checks: dict[str, bool]
+
+
+@router.get("/api/receipt/{run_id:path}", response_model=ReceiptView)
+async def api_receipt(run_id: str) -> ReceiptView:
+    """Re-verify the manifest emitted at run completion.
+
+    404 when the run id is unknown; 409 when the run exists but hasn't produced
+    a manifest yet (still training, or it failed before the receipt was sealed).
+    """
+    from mindxtrain.provenance.manifest import Manifest
+    from mindxtrain.provenance.verify import verify_receipt
+
+    snap = _REGISTRY.get(run_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
+
+    run_dir = Path(snap.out_dir)
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail="no receipt yet for this run (run is still training or failed)",
+        )
+
+    manifest = Manifest.model_validate_json(manifest_path.read_text())
+    plan_path = run_dir / "autotune_plan.json"
+    plan_json = plan_path.read_bytes() if plan_path.is_file() else None
+    config_snapshot = run_dir / "config.snapshot.yaml"
+
+    try:
+        checks = verify_receipt(
+            manifest,
+            config_yaml_path=config_snapshot,
+            dataset_manifest_path=run_dir / "dataset_manifest.json",
+            checkpoint_dir=run_dir / "checkpoint",
+            eval_json_path=run_dir / "eval" / "lm_eval.json",
+            plan_json=plan_json,
+        )
+    except (FileNotFoundError, NotADirectoryError):
+        # A required artifact (config snapshot or checkpoint dir) vanished after
+        # the receipt was written — report unverified rather than 500.
+        checks = {
+            "config_yaml": False,
+            "checkpoint": False,
+            "dataset": False,
+            "eval_json": False,
+            "autotune_plan": False,
+        }
+
+    return ReceiptView(
+        run_id=manifest.run_id,
+        base_model=manifest.base_model,
+        git_sha=manifest.git_sha,
+        created_at=manifest.created_at.isoformat(),
+        hashes=ReceiptHashesView(
+            config_yaml=manifest.blake3.config_yaml,
+            checkpoint=manifest.blake3.checkpoint,
+            autotune_plan=manifest.blake3.autotune_plan,
+            dataset=manifest.blake3.dataset,
+            eval_json=manifest.blake3.eval_json,
+        ),
+        verified=all(checks.values()),
+        checks=checks,
+    )

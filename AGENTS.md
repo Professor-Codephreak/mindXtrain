@@ -27,7 +27,7 @@ The base install is CPU-only and runs the CLI, Coach UI, `bench --dry-run`, mani
 ```bash
 uv run ruff check .
 uv run mypy mindxtrain/config mindxtrain/provenance
-uv run pytest -q       # → 112 passed
+uv run pytest -q       # → 564 passed
 ```
 
 CI runs the same three commands on Ubuntu 24.04 / Python 3.12 (CPU-only).
@@ -44,6 +44,7 @@ These are encoded in the schema/recipes; violating them is a deployment bug. Ful
 6. **Numpy pinned `<2.0`** against `torch==2.9.1+rocm7.2.1.lw`.
 7. **Lazy imports for optional deps** — `import mindxtrain.eval.harness` must succeed even without `--extra eval`. Error messages must include the exact `uv sync --extra <group>` to run.
 8. **Reuse boundaries** — Codephreak persona JSON loads at runtime via `MINDXTRAIN_PERSONA_PATH` from `/home/hacker/mindX/`, not by copying bytes. Never reuse `/home/hacker/aglm/` (broken per its own README).
+9. **Clean-room policy** — mindXtrain (and Coach) is a clean-room codebase: functionality from mindX or any external source is **reimplemented/adapted locally from behavior or spec, never copied byte-for-byte**. Consume foreign artifacts (dream corpus, persona) through runtime boundaries; do not vendor foreign code. mindXtrain and Coach **train models** — the dataset/persona/imprint machinery is mindXtrain-native. See [`CLAUDE.md`](CLAUDE.md) §"Clean-room policy".
 
 ## Quick commands
 

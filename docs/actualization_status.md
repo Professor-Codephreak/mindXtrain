@@ -5,6 +5,30 @@ install hint or runtime requirement. Reflects the state after the
 "actualize stubs" pass; counts and labels track the canonical layout from
 [`blueprints/mindxtrain2.md`](blueprints/mindxtrain2.md) §Part 4.
 
+## v1.0.0 production-readiness (objective audit, 2026-06-11)
+
+Honest classification for the v1.0.0 release. **CPU is active**; the GPU path is
+code-complete but needs real ROCm hardware to execute.
+
+**Production-ready on CPU now (run today, no GPU):**
+- Training: `trl_cpu` + `trl_local` (real checkpoints, in-process TRL).
+- Data: `hf`, `local` (JSONL), `mindx_dreams` sources; dedupe/filter/tokenize/pack.
+- Provenance: BLAKE3 manifest + `emit_receipt_for_run` + `verify` + `mindxtrain receipt`.
+- Persona/imprint: script authoring, `imprint` recall before/after, ollama push (LoRA merge).
+- Operator/Coach: recipes, bench dry-run, compile, cost, live-training SSE, receipt card,
+  create-dataset, MEI, training-jobs API, `/v1/chat/completions`.
+- Provenance chain helpers: x402 invoice/settlement, ERC-8004 encode/broadcast (need `--extra chain`).
+
+**GPU-ready, hardware-pending (code complete; needs MI300X/ROCm to run):**
+- Subprocess training backends `axolotl` / `unsloth` / `torchtune` / `primus` (command-built + unit-tested; not executed e2e here).
+- Real autotune probes (attention/GEMM timing) — dry-run reference on CPU.
+- Quark FP8/MXFP4 quantize; vLLM / SGLang serve launchers (commands built, serving needs GPU).
+
+**Stubs — NOT claimed as working in 1.0.0 (roadmap):**
+- `/v1/agentic` mindX MASTERMIND dispatch → `501` (`operator/app.py`).
+- Cloud provisioners `akash` / `ionet` / `bacalhau` / `tensorwave` → `NotImplementedError` (`budget/providers/*`).
+- `lighthouse` as a *data source* and `storage/lighthouse.py:get_dir` → redirect to IPFS.
+
 ## Headline numbers
 
 - **99** Python modules under `mindxtrain/`.
@@ -12,7 +36,7 @@ install hint or runtime requirement. Reflects the state after the
 - **5 cloud-provider stubs** preserved in `budget/providers/*` (post-hackathon).
 - **2 deliberate-redirects** that raise with a pointer to a sibling module
   (`storage/lighthouse.py:get_dir` → use `storage.ipfs`).
-- **112 tests** pass on a CPU-only laptop (`uv run pytest -q`).
+- **566 tests** pass on a CPU-only laptop (`uv run pytest -q`).
 - **0** OLD-namespace imports anywhere (`from xtrain.`, `from automindx.`,
   `from custmodel` are all gone).
 
@@ -211,7 +235,7 @@ tests/
 └── test_vllm_launcher.py             # vLLM cmd builder
 ```
 
-`uv run pytest -q` → **112 passed**.
+`uv run pytest -q` → **564 passed**.
 
 ## See also
 

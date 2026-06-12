@@ -10,7 +10,7 @@ from __future__ import annotations
 from mindxtrain.autotune.attention_probe import probe_attention
 from mindxtrain.autotune.gemm_probe import probe_gemm
 from mindxtrain.autotune.plan import AutotunePlan, ProbeTiming
-from mindxtrain.autotune.rccl_probe import probe_rccl
+from mindxtrain.autotune.rccl_probe import detect_gpu_count, probe_rccl
 
 
 def run_autotune(gpu_index: int = 0, dry_run: bool = False) -> AutotunePlan:
@@ -23,16 +23,18 @@ def run_autotune(gpu_index: int = 0, dry_run: bool = False) -> AutotunePlan:
         return _reference_plan()
 
     attention_backend, attention_timings = probe_attention(gpu_index=gpu_index)
-    gemm_heuristic = probe_gemm(gpu_index=gpu_index)
-    rccl_config = probe_rccl(gpu_index=gpu_index)
+    gemm_heuristic, gemm_timings = probe_gemm(gpu_index=gpu_index)
+    gpu_count = detect_gpu_count()
+    rccl_config = probe_rccl(gpu_index=gpu_index, gpu_count=gpu_count)
 
     return AutotunePlan(
         attention_backend=attention_backend,
         gemm_heuristic=gemm_heuristic,
         rccl_config=rccl_config,
-        probe_timings=attention_timings,
+        fsdp_shard_width=8 if gpu_count == 8 else 1,
+        probe_timings=[*attention_timings, *gemm_timings],
         notes=[
-            "Day 2 real probe: attention measured, GEMM/RCCL from documented AMD heuristics.",
+            f"real probe: attention + GEMM measured; {gpu_count or 'no'} GPU(s) detected.",
         ],
     )
 

@@ -28,4 +28,7 @@ out/
 autotune_plan.json
 custmodel/runs/
 
+# Agent working dirs (plans, memory, local settings) — never commit.
+.claude/
+
 .DS_Store

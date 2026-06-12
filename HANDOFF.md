@@ -170,8 +170,20 @@ print(out)
 
 # Verify it round-trips:
 mindxtrain receipt ./out/runs/<run_name>/manifest.json --config run.yaml
-# → all four BLAKE3 fields = true
+# → all BLAKE3 fields = true (config, checkpoint, autotune_plan; dataset/eval if present)
 ```
+
+> **Auto-emitted receipts (operator + CPU lane).** Runs launched through the
+> operator — Coach UI or `POST /v1/training/jobs` — now write `manifest.json`
+> automatically at completion via `provenance.manifest.emit_receipt_for_run`,
+> alongside `config.snapshot.yaml` and `autotune_plan.json` in the run dir. The
+> receipt **binds the frozen AutotunePlan hash to the checkpoint hash** — this is
+> the AOT artifact that makes a run bitwise-verifiable (cf. Verde/RepOps). The
+> Coach "Verifiable receipt" card re-checks it live; `mindxtrain receipt` does the
+> same from a shell. The manual `emit_receipt` above remains the full GPU path
+> (dataset + eval JSON included). On MI300X, also snapshot the AOTriton /
+> hipBLASLt tuning caches next to `autotune_plan.json` so the compiled artifact —
+> not just the plan — is reproducible across machines.
 
 ## 7. Publish (HF Hub + Lighthouse + mindX register)
 

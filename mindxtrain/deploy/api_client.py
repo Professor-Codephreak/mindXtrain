@@ -9,6 +9,7 @@ endpoints aren't deployed yet, set `MINDXTRAIN_API_BASE_URL` /
 
 from __future__ import annotations
 
+import json
 import os
 
 import httpx
@@ -120,6 +121,71 @@ def list_on_agenticplace(
     return str(data.get("listing_url", data))
 
 
+def trigger_dream_ingestion(
+    *,
+    run_id: str,
+    adapter_dir: str,
+    base_model: str,
+    persona_name: str = "",
+    imprint_delta: float | None = None,
+    api_url: str | None = None,
+    timeout_s: float = 10.0,
+) -> dict[str, str]:
+    """Hand a freshly-imprinted actor to mindX's `machine.dream` 8hr cycle.
+
+    Clean-room boundary: we never import or run mindX code — we hand off an
+    artifact *pointer* (run id + adapter path + base model + imprint delta) so the
+    mindX dream cycle (`agents/machine_dreaming.py`) can ingest the trained actor
+    on its next pass. Best-effort, with two delivery modes:
+
+    1. HTTP — POST `/v1/dream/ingest` on the mindX API when `MINDXTRAIN_API_BASE_URL`
+       is set and reachable.
+    2. Inbox drop — write a pointer JSON into
+       `$MINDXTRAIN_MINDX_HOME/data/incoming/<run_id>.dream.json` so a filesystem-
+       watching dream cycle picks it up.
+
+    Returns `{"mode": ..., "target": ...}`; never raises — a failed trigger reports
+    via the return dict rather than failing the training run.
+    """
+    payload = {
+        "run_id": run_id,
+        "adapter_dir": adapter_dir,
+        "base_model": base_model,
+        "persona": persona_name,
+        "imprint_delta": "" if imprint_delta is None else f"{imprint_delta:.4f}",
+        "source": "mindxtrain.imprint",
+    }
+    api = (api_url or os.environ.get("MINDXTRAIN_API_BASE_URL", "")).rstrip("/")
+    if api:
+        try:
+            with httpx.Client(timeout=timeout_s) as client:
+                resp = client.post(f"{api}/v1/dream/ingest", json=payload)
+                resp.raise_for_status()
+            return {"mode": "http", "target": f"{api}/v1/dream/ingest"}
+        except (httpx.HTTPError, OSError) as exc:
+            payload["http_error"] = str(exc)
+
+    # Filesystem inbox fallback — the 8hr dream cycle watches data/incoming.
+    home = os.environ.get("MINDXTRAIN_MINDX_HOME", "")
+    if home:
+        from pathlib import Path
+
+        inbox = Path(home).expanduser() / "data" / "incoming"
+        try:
+            inbox.mkdir(parents=True, exist_ok=True)
+            ptr = inbox / f"{run_id}.dream.json"
+            ptr.write_text(json.dumps(payload, indent=2))
+            return {"mode": "inbox", "target": str(ptr)}
+        except OSError as exc:
+            return {"mode": "failed", "target": str(inbox), "error": str(exc)}
+
+    return {
+        "mode": "skipped",
+        "target": "",
+        "note": "set MINDXTRAIN_API_BASE_URL or MINDXTRAIN_MINDX_HOME to deliver",
+    }
+
+
 __all__ = [
     "AgenticPlaceListing",
     "MindXAgentRegistration",
@@ -127,4 +193,5 @@ __all__ = [
     "list_on_agenticplace",
     "register_with_mindx",
     "swap_mindx_fallback_model",
+    "trigger_dream_ingestion",
 ]

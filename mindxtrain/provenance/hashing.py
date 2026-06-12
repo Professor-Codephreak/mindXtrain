@@ -14,6 +14,15 @@ from blake3 import blake3
 _CHUNK = 1 << 20  # 1 MiB
 
 
+def blake3_bytes(data: bytes) -> str:
+    """Return BLAKE3 hex digest of an in-memory byte string.
+
+    Used to hash artifacts that never touch disk in a stable form — notably the
+    frozen AutotunePlan JSON — without round-tripping through a temp file.
+    """
+    return blake3(data).hexdigest()
+
+
 def blake3_file(path: Path) -> str:
     """Return BLAKE3 hex digest of a single file."""
     h = blake3()

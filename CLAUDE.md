@@ -13,14 +13,14 @@ Built for the AMD × lablab.ai hackathon (May 4–10 2026). The base install is 
 The repo uses `uv` with Python 3.12 (pinned `>=3.12,<3.13`). All commands run from the repo root.
 
 ```bash
-uv sync                         # base install (CPU-only; 112 tests pass)
+uv sync                         # base install (CPU-only; 564 tests pass)
 uv sync --extra ml --extra eval --extra data    # opt into heavyweight groups
 uv sync --all-extras            # everything except amd-quark (ships in container)
 
 # Standard local cycle — CI runs the same:
 uv run ruff check .                                       # lint
 uv run mypy mindxtrain/config mindxtrain/provenance       # mypy --strict (only these two)
-uv run pytest -q                                          # → 112 passed
+uv run pytest -q                                          # → 564 passed
 uv run pytest tests/test_config_schema.py -q              # single test file
 uv run pytest tests/test_config_schema.py::test_xgmi_2gpu_rejected   # single test
 
@@ -47,7 +47,7 @@ The codebase is organized so each inner layer is consumed by the next, never the
 1. **CLI** (`mindxtrain/cli/main.py`, typer) — `init | bench | train | dataset prep | eval | quantize | serve | publish | receipt`. Never reaches into the training backend; consumes a Pydantic-validated config + `AutotunePlan` and dispatches downward.
 2. **Autotune** (`mindxtrain/autotune/`) — the differentiator. Emits `AutotunePlan` JSON, AOT-only.
 3. **Dataset** (`mindxtrain/data/`) — curate → dedupe (MinHash + SemDeDup) → filter → tokenize → pack → synth → verify.
-4. **Training** (`mindxtrain/train/`) — backend dispatch (`dispatch.py` → axolotl / unsloth / torchtune / primus / TRL in-process). Methods: SFT, DPO, ORPO, GRPO, GSPO, RLHF, tool-use, CPT.
+4. **Training** (`mindxtrain/train/`) — backend dispatch (`dispatch.py` → axolotl / unsloth / torchtune / primus for MI300X subprocess; `trl_cpu` for CPU and `trl_local` for device-aware consumer-GPU/CPU-fallback, both in-process TRL). Methods: SFT, DPO, ORPO, GRPO, GSPO, RLHF, tool-use, CPT.
 5. **Artifact + Integration** (`mindxtrain/{eval,deploy,storage,provenance,operator}`) — Quark FP8/MXFP4 → lm-eval-harness → HF Hub push → Lighthouse pin → mindX register → AgenticPlace → BANKON ENS → x402 metering → ERC-8004 attestation.
 
 Key end-to-end flow: `XTrainConfig` (Pydantic) + `AutotunePlan` → `dispatch_training()` → `checkpoint_dir/` → `eval.json` → `quantized/` → `manifest.json` (BLAKE3 of YAML+dataset+ckpt+eval, plus HF/Lighthouse/INFT/ASA pointers) → operator serves on `/v1/chat/completions`. `mindxtrain receipt` re-hashes and verifies the manifest round-trip.
@@ -72,9 +72,26 @@ Optional dep groups: `ml` (trl, transformers, peft, accelerate, datasets), `eval
 
 Every module that wants an optional dep guards the import inside the function that needs it. `import mindxtrain.eval.harness` must always succeed even without `--extra eval`. Error messages must include the exact `uv sync --extra <group>` to run. New modules taking optional deps must follow this pattern.
 
+## Clean-room policy (non-negotiable)
+
+mindXtrain is a **clean-room** codebase: functionality that originates in another
+project (mindX, external repos, reference implementations) is **reimplemented or
+adapted locally from observed behavior or a spec — never copied byte-for-byte**. The
+in-tree code is owned by mindXtrain and untainted by foreign source.
+
+When you need something from another codebase:
+1. **Load it at runtime** via a documented env var / file path (e.g. the Codephreak
+   persona via `MINDXTRAIN_PERSONA_PATH`), or
+2. **Reimplement the behavior locally** in mindXtrain style, citing the source as a
+   *reference*, not pasting it.
+
+This applies to the whole product, including the Coach: **mindXtrain and Coach train
+models**, and the training/dataset/persona machinery is mindXtrain-native — it consumes
+mindX artifacts (dream corpus, persona) through boundaries, it does not vendor mindX code.
+
 ## Reuse boundaries
 
-- **From `/home/hacker/mindX/`** (production codebase): Codephreak persona JSON loaded at runtime via `MINDXTRAIN_PERSONA_PATH`. Do not copy file bytes — load via env var.
+- **From `/home/hacker/mindX/`** (production codebase): Codephreak persona JSON loaded at runtime via `MINDXTRAIN_PERSONA_PATH`. Do not copy file bytes — load via env var (clean-room).
 - **Not** from `/home/hacker/aglm/` — broken per its own README.
 
 ## Adding things

@@ -75,6 +75,10 @@ class CreateJobRequest(BaseModel):
     config_yaml: str | None = Field(default=None, description="Raw YAML body of an XTrainConfig.")
     config: dict[str, Any] | None = Field(default=None, description="Parsed XTrainConfig JSON.")
     out_dir: str | None = Field(default=None, description="Optional override for the run output directory.")
+    settlement_tx: str | None = Field(
+        default=None,
+        description="Algorand USDC settlement tx id, required when x402 metering is enabled.",
+    )
 
     @model_validator(mode="after")
     def _exactly_one_source(self) -> CreateJobRequest:
@@ -144,7 +148,7 @@ def _spawn_for_backend(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) ->
     - Anything else falls through to the Axolotl-style prepare_run +
       subprocess streamer (the same code path Coach uses).
     """
-    if cfg.train.backend == "trl_cpu":
+    if cfg.train.backend in ("trl_cpu", "trl_local"):
         _spawn_inprocess_cpu(run, cfg, plan)
         return
 
@@ -161,13 +165,17 @@ def _spawn_for_backend(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) ->
 
 
 def _spawn_inprocess_cpu(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) -> None:
-    """Daemon-thread launcher for the trl_cpu backend.
+    """Daemon-thread launcher for the in-process TRL lanes (`trl_cpu`/`trl_local`).
 
-    The CPU lane is in-process and synchronous; we wrap it in a thread so
-    the FastAPI handler returns immediately. Log lines from the runner are
-    forwarded as `LogEvent`s; final status is `succeeded`/`failed`.
+    Both lanes run in-process and synchronously; we wrap them in a thread so the
+    FastAPI handler returns immediately. `trl_local` auto-detects a local GPU
+    (else CPU fallback); `trl_cpu` pins CPU. Log lines are forwarded as
+    `LogEvent`s; final status is `succeeded`/`failed`.
     """
-    from mindxtrain.train.backend_trl_cpu import run_trl_cpu
+    from mindxtrain.train.backend_trl_cpu import run_trl_cpu, run_trl_local
+
+    runner = run_trl_local if cfg.train.backend == "trl_local" else run_trl_cpu
+    lane = cfg.train.backend
 
     def _on_line(line: str) -> None:
         _REGISTRY.publish_threadsafe(
@@ -176,10 +184,10 @@ def _spawn_inprocess_cpu(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) 
 
     def _thread() -> None:
         _REGISTRY.publish_threadsafe(
-            run.id, _runs.StatusEvent(run_id=run.id, status="running", message="cpu lane"),
+            run.id, _runs.StatusEvent(run_id=run.id, status="running", message=f"{lane} lane"),
         )
         try:
-            run_trl_cpu(cfg, plan, run.out_dir, on_line=_on_line)
+            runner(cfg, plan, run.out_dir, on_line=_on_line)
         except Exception as exc:
             _REGISTRY.publish_threadsafe(
                 run.id,
@@ -187,12 +195,14 @@ def _spawn_inprocess_cpu(run: _runs.Run, cfg: XTrainConfig, plan: AutotunePlan) 
             )
             _REGISTRY.close_subscribers(run.id)
             return
+        from mindxtrain.operator.receipt_emit import emit_run_receipt
+        emit_run_receipt(_REGISTRY, run, cfg, plan)
         _REGISTRY.publish_threadsafe(
-            run.id, _runs.StatusEvent(run_id=run.id, status="succeeded", message="cpu lane done"),
+            run.id, _runs.StatusEvent(run_id=run.id, status="succeeded", message=f"{lane} lane done"),
         )
         _REGISTRY.close_subscribers(run.id)
 
-    threading.Thread(target=_thread, daemon=True, name=f"trl-cpu-{run.id}").start()
+    threading.Thread(target=_thread, daemon=True, name=f"{lane}-{run.id}").start()
 
 
 def _sse_headers() -> dict[str, str]:
@@ -206,9 +216,70 @@ def _sse_headers() -> dict[str, str]:
 # ---- endpoints -------------------------------------------------------------
 
 
+def _x402_required() -> bool:
+    """Whether to gate training jobs behind an x402 USDC settlement.
+
+    Off by default. Set `MINDXTRAIN_X402_REQUIRED` to a truthy value to require
+    payment. This is a thin stub: it issues an invoice and verifies an Algorand
+    USDC settlement, but does NOT submit the on-chain `recordSettlement` proof to
+    the x402_receiver contract — that facilitator half is post-hackathon work.
+    """
+    return os.environ.get("MINDXTRAIN_X402_REQUIRED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _x402_price_usdc() -> float:
+    try:
+        return float(os.environ.get("MINDXTRAIN_X402_PRICE_USDC", "1.0"))
+    except ValueError:
+        return 1.0
+
+
+def _enforce_x402(req: CreateJobRequest, recipe_label: str) -> None:
+    """Raise 402 with an invoice when payment is required but unsettled.
+
+    When a settlement tx is supplied, verify it on Algorand and proceed only if
+    confirmed. Verifying needs `--extra chain` (algosdk); the unpaid 402 path
+    does not (the invoice is constructed locally).
+    """
+    if not _x402_required():
+        return
+
+    from mindxtrain.provenance.x402 import Invoice, validate_settlement
+
+    price = _x402_price_usdc()
+    receiver = os.environ.get("MINDXTRAIN_X402_RECEIVER", "")
+
+    if not req.settlement_tx:
+        invoice = Invoice(
+            invoice_id=f"job-{recipe_label}",
+            run_id=recipe_label,
+            amount_usdc=price,
+            receiver=receiver,
+            pay_url=os.environ.get("MINDXTRAIN_FACILITATOR_URL", ""),
+        )
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "payment required", "invoice": invoice.model_dump()},
+        )
+
+    settlement = validate_settlement(
+        req.settlement_tx,
+        expected_amount_usdc=price,
+        expected_receiver=receiver or None,
+    )
+    if not settlement.confirmed:
+        raise HTTPException(
+            status_code=402,
+            detail={"error": "settlement not confirmed", "tx_id": req.settlement_tx},
+        )
+
+
 @router.post("/jobs", response_model=JobInfo, dependencies=[Depends(_bearer)])
 async def create_job(req: CreateJobRequest) -> JobInfo:
     recipe_label, cfg = _resolve_config(req)
+    _enforce_x402(req, recipe_label)
     plan = run_autotune(dry_run=True)
     out_dir = Path(req.out_dir) if req.out_dir else Path("./out/runs") / cfg.meta.run_name
 

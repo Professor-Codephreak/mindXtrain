@@ -14,7 +14,8 @@ runner = CliRunner()
 def test_help_lists_all_eight_verbs():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for verb in ("init", "bench", "train", "eval", "quantize", "serve", "publish", "receipt", "dataset"):
+    for verb in ("init", "bench", "train", "eval", "quantize", "serve", "publish",
+                 "receipt", "dataset", "imprint"):
         assert verb in result.stdout
 
 
@@ -59,6 +60,60 @@ def test_train_reports_missing_accelerate(tmp_path):
     assert result.exit_code in (0, 1, 3)
     if result.exit_code == 3:
         assert "training failed" in result.stdout.lower() or "accelerate" in result.stdout.lower()
+
+
+def _seed_run_for_receipt(tmp_path, monkeypatch):
+    """Create out/runs/<run_name>/ with a full run-emitted manifest under tmp cwd."""
+    from mindxtrain.autotune.plan import AutotunePlan
+    from mindxtrain.config.loader import load_config, render_recipe
+    from mindxtrain.provenance import manifest as _m
+
+    monkeypatch.setattr(_m, "_fetch_time_attestation", lambda: _m.TimeAttestation())
+    monkeypatch.chdir(tmp_path)
+
+    recipe = tmp_path / "run.yaml"
+    recipe.write_text(render_recipe("qwen3_8b_sft_lora"))
+    cfg = load_config(recipe)
+
+    run_dir = tmp_path / "out" / "runs" / cfg.meta.run_name
+    ckpt = run_dir / "checkpoint"
+    ckpt.mkdir(parents=True)
+    (ckpt / "adapter_model.safetensors").write_bytes(b"\x00" * 64)
+
+    m = _m.emit_receipt_for_run(cfg, cfg.meta.run_name, run_dir=run_dir, plan=AutotunePlan())
+    manifest_path = _m.write_run_manifest(m, run_dir)
+    return recipe, run_dir, manifest_path
+
+
+def test_receipt_verifies_run_emitted_manifest(tmp_path, monkeypatch):
+    recipe, _run_dir, manifest_path = _seed_run_for_receipt(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["receipt", str(manifest_path), "--config", str(recipe)])
+    assert result.exit_code == 0, result.stdout
+    assert "autotune_plan" in result.stdout
+
+
+def test_receipt_detects_checkpoint_tamper(tmp_path, monkeypatch):
+    recipe, run_dir, manifest_path = _seed_run_for_receipt(tmp_path, monkeypatch)
+    # Tamper a checkpoint file after the manifest is sealed.
+    (run_dir / "checkpoint" / "adapter_model.safetensors").write_bytes(b"\xff" * 64)
+    result = runner.invoke(app, ["receipt", str(manifest_path), "--config", str(recipe)])
+    assert result.exit_code == 2, result.stdout
+
+
+def test_serve_to_sglang_prints_command(tmp_path, monkeypatch):
+    from mindxtrain.config.loader import load_config, render_recipe
+
+    monkeypatch.chdir(tmp_path)
+    recipe = tmp_path / "run.yaml"
+    recipe.write_text(render_recipe("qwen3_8b_sft_lora"))
+    cfg = load_config(recipe)
+    quant = tmp_path / "out" / "runs" / cfg.meta.run_name / "quantized"
+    quant.mkdir(parents=True)
+
+    result = runner.invoke(app, ["serve", str(recipe), "--to", "sglang"])
+    assert result.exit_code == 0, result.stdout
+    assert "sglang cmd" in result.stdout
+    assert "sglang.launch_server" in result.stdout
 
 
 def test_dataset_prep_reports_missing_datasets(tmp_path):

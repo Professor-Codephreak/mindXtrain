@@ -1,0 +1,118 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local-GPU variant of the mindX self-training recipe.
+#
+# Purpose: train on a consumer-level accelerator when one is present. The
+# `trl_local` backend is device-aware — it uses a local GPU (NVIDIA CUDA or a
+# ROCm-supported Radeon, bf16/fp16) when one is visible, and falls back to CPU
+# (float32) otherwise. The SAME recipe therefore runs on a gaming desktop, a
+# ROCm workstation, or a CPU-only laptop unchanged.
+#
+# Note: integrated Vega/RDNA APUs (e.g. Ryzen "Raven"/gfx90c) are NOT supported
+# by ROCm and will fall back to CPU. A discrete RX 6800/7900 (gfx1030/gfx1100)
+# or any NVIDIA RTX card is the intended GPU target.
+#
+# Confirm the device that will be used:
+#   python -c "import torch; print(torch.cuda.is_available(), torch.version.hip)"
+meta:
+  project: mindx_self_training
+  run_name: mindx_fallback_qwen3_1_5b_local
+  seed: 2048
+  license: apache-2.0
+  description: >-
+    Device-aware fine-tune of SmolLM2-135M on the mindX dream + evolution
+    corpus. Uses a local consumer GPU when available, else CPU. Produces the
+    same local-fallback adapter as the CPU recipe.
+
+hardware:
+  name: consumer_gpu
+  gfx_arch: gfx1100        # representative discrete Radeon (RX 7900); descriptive only
+  gpus: 1
+  expected_hbm_gb: 16      # typical consumer VRAM; not used to gate the in-process lane
+
+autotune:
+  enabled: false
+  budget_seconds: 60
+  policy: aot_only
+
+model:
+  name: HuggingFaceTB/SmolLM2-135M
+  # On GPU the backend overrides these with sdpa + bf16/fp16; on CPU fallback
+  # it uses eager + float32. The recipe values are the CPU-safe baseline.
+  attn_implementation: eager
+  torch_dtype: float32
+  trust_remote_code: false
+
+data:
+  source: mindx_dreams
+  path: /home/hacker/mindX/data/memory
+  max_samples: 512
+  seq_len: 512
+  packing: true
+  eval_split: 0.1
+  include_evolutions: true
+
+train:
+  backend: trl_local
+  logging_steps: 1
+  method:
+    kind: lora
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  optimizer:
+    name: adamw_torch
+    lr: 1.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 2
+  batch:
+    # On a GPU the per-device batch runs uncapped; on CPU fallback the backend
+    # clamps it to 2 automatically. grad_accum keeps the effective batch steady.
+    per_device: 4
+    grad_accum: 2
+  precision: bfloat16
+  # On GPU this is honoured (trades compute for memory); on CPU fallback the
+  # backend forces it off (checkpointing is pathologically slow on CPU).
+  gradient_checkpointing: true
+  flash_attention:
+    backend: ck
+  fsdp:
+    enabled: false
+  # cpu_throttle still applies on CPU fallback; ignored on the GPU path.
+  cpu_throttle:
+    percent: 50
+    nice_level: 10
+    omp_proc_bind: true
+  env: {}
+
+eval:
+  harness:
+    tasks: [mmlu]
+    fewshot: 0
+  regression:
+    baseline: ""
+    threshold_pct: -100.0
+
+quantize:
+  enabled: false
+  scheme: none
+  ptpc: false
+
+serve:
+  backend: vllm-rocm
+  reasoning_parser: none
+  tool_call_parser: none
+  tensor_parallel: 1
+  max_model_len: 2048
+  port: 8000
+
+publish:
+  enabled: false
+
+receipt:
+  output: ./out/receipt.json
+  include:
+    - yaml_hash
+    - dataset_cids

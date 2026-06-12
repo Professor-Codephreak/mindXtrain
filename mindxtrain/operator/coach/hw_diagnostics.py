@@ -330,23 +330,40 @@ class HardwareProfile(BaseModel):
     nvidia: NVIDIAInfo
     recommended_lane: str = Field(
         description=(
-            "`trl_cpu` / `axolotl_amd` / `axolotl_cuda` — picks the best "
-            "training lane based on what's actually detected."
+            "`trl_cpu` / `trl_local` / `axolotl_amd` — picks the best training "
+            "lane based on what's actually detected. `trl_local` is the "
+            "device-aware in-process lane for consumer GPUs."
         ),
     )
+
+
+def _is_mi300x_class(name: str) -> bool:
+    """True for datacenter CDNA cards (MI2xx/MI3xx, Instinct) — the axolotl target.
+
+    Matches "MI300X", "AMD Instinct MI325X", "MI250", etc. — `MI` + 2-3 digits,
+    not requiring a trailing word boundary (vendor strings append X/A suffixes).
+    """
+    upper = name.upper()
+    return "INSTINCT" in upper or bool(re.search(r"\bMI\d{2,3}", upper))
 
 
 def recommend_lane(cpu: CPUInfo, amd: AMDInfo, nvidia: NVIDIAInfo) -> str:
     """Pick the most capable detected training lane.
 
-    Priority: AMD GPU (the MI300X target) → NVIDIA local GPU → CPU.
-    Returns one of: 'axolotl_amd', 'axolotl_cuda', 'trl_cpu'. Defaults
-    to 'trl_cpu' which is always available.
+    - A datacenter AMD Instinct (MI300X-class) → `axolotl_amd` (the AOT subprocess
+      path with the seven MI300X env vars).
+    - Any other local GPU — a consumer Radeon, or any NVIDIA card — → `trl_local`,
+      the device-aware in-process lane (there is no CUDA-axolotl subprocess path).
+    - Nothing detected → `trl_cpu`.
+
+    Returns one of: 'axolotl_amd', 'trl_local', 'trl_cpu'.
     """
     if amd.available and amd.gpus:
-        return "axolotl_amd"
+        if any(_is_mi300x_class(g.name) for g in amd.gpus):
+            return "axolotl_amd"
+        return "trl_local"  # consumer Radeon
     if nvidia.available and nvidia.gpus:
-        return "axolotl_cuda"
+        return "trl_local"  # local NVIDIA (consumer RTX) — in-process lane
     _ = cpu  # CPU is the universal fallback; argument kept for signature symmetry
     return "trl_cpu"
 

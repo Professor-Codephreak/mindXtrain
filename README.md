@@ -33,7 +33,7 @@ documentation hub.
 
 ```bash
 uv sync                                                    # base install
-uv run pytest -q                                           # → 112 passed
+uv run pytest -q                                           # → 564 passed
 uv run mindxtrain --help                                   # 9 verbs
 uv run mindxtrain init --template qwen3_8b_sft_lora --out run.yaml
 uv run mindxtrain bench --dry-run --out plan.json
@@ -60,7 +60,7 @@ mindxtrain/{cli,config,data,models,train,eval,autotune,
             operator,storage,provenance,deploy,budget}/   # 99 modules
 contracts/        Foundry workspace for ERC-8004 attestation registry
 ops/              containerfiles, compose, k8s, vmm, gensyn
-tests/            pytest suite — 112 tests, CPU-only smoke
+tests/            pytest suite — 566 tests, CPU-only smoke
 examples/         demo YAML configs
 docs/             user-facing documentation + frozen blueprints
 scripts/          dev helpers

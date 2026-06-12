@@ -1,24 +1,73 @@
 """hipBLASLt GEMM heuristic selection.
 
-Per the blueprint decision (1 real probe + 2 documented heuristics), we do not
-enumerate hipBLASLt heuristics ourselves. We pick `hipblaslt_default` for
-gfx942 based on AMD's documented MI300X tuning guidance.
+Previously this returned `hipblaslt_default` unconditionally. It now runs a short
+GEMM microbenchmark on a representative MI300X LoRA shape when torch + a GPU are
+available, records the timing into the AutotunePlan, and promotes the heuristic
+to `hipblaslt_tuned` when ROCm TunableOp tuning is active (PYTORCH_TUNABLEOP_ENABLED).
+On a CPU dev box (no torch GPU) it stays at the documented default with no timing.
 
-Reference: AMD ROCm 7.2.1 release notes, hipBLASLt 0.10 default heuristic
-selection for gfx942 BF16/FP16 GEMMs is within 5% of hand-tuned variants for
-the shapes mindXtrain hits (LoRA rank 16-64 on hidden 2048-8192).
+Reference: AMD ROCm 7.2.1 release notes — hipBLASLt 0.10 default heuristic for
+gfx942 BF16/FP16 GEMMs is within ~5% of hand-tuned variants for the shapes
+mindXtrain hits (LoRA rank 16-64 on hidden 2048-8192); TunableOp closes the rest.
 """
 
 from __future__ import annotations
 
-from mindxtrain.autotune.plan import GemmHeuristic
+import importlib.util
+import os
+import time
+
+from mindxtrain.autotune.plan import GemmHeuristic, ProbeTiming
+
+# Representative MI300X training GEMM: (M, K) x (K, N) — a hidden=8192 projection
+# at batch*seq = 4096 tokens, the dominant LoRA-base shape.
+_GEMM_SHAPE = (4096, 8192, 8192)
+_ITERATIONS = 10
 
 
-def probe_gemm(gpu_index: int = 0) -> GemmHeuristic:
-    """Return the GEMM heuristic for the autotune plan.
+def _tunableop_active() -> bool:
+    return os.environ.get("PYTORCH_TUNABLEOP_ENABLED", "0") not in {"", "0", "false", "False"}
 
-    Day 2 stays at the documented default; revisit post-hackathon if MMLU
-    eval shows GEMM-bound throughput regression.
+
+def probe_gemm(gpu_index: int = 0) -> tuple[GemmHeuristic, list[ProbeTiming]]:
+    """Return (heuristic, timings) for the autotune plan.
+
+    Returns ('hipblaslt_default', []) when torch + GPU aren't available so the
+    dry-run / CPU path stays deterministic.
     """
     _ = gpu_index
-    return "hipblaslt_default"
+    if importlib.util.find_spec("torch") is None:
+        return "hipblaslt_default", []
+
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return "hipblaslt_default", []
+
+        m, k, n = _GEMM_SHAPE
+        device = "cuda"
+        dtype = torch.bfloat16
+        a = torch.randn(m, k, device=device, dtype=dtype)
+        b = torch.randn(k, n, device=device, dtype=dtype)
+
+        for _ in range(3):  # warmup (also primes TunableOp tuning)
+            _ = a @ b
+        torch.cuda.synchronize()
+
+        t0 = time.perf_counter()
+        for _ in range(_ITERATIONS):
+            _ = a @ b
+        torch.cuda.synchronize()
+        median_ms = (time.perf_counter() - t0) * 1000.0 / _ITERATIONS
+    except (RuntimeError, ImportError, OSError):
+        return "hipblaslt_default", []
+
+    heuristic: GemmHeuristic = "hipblaslt_tuned" if _tunableop_active() else "hipblaslt_default"
+    timing = ProbeTiming(
+        label=f"gemm-{m}x{k}x{n}",
+        backend=heuristic,
+        median_ms=float(median_ms),
+        iterations=_ITERATIONS,
+    )
+    return heuristic, [timing]

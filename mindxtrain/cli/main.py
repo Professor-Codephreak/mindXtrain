@@ -301,7 +301,8 @@ def serve(
     checkpoint: Path = typer.Option(None, "--checkpoint", "-c"),
     to: str = typer.Option(
         "vllm", "--to",
-        help="Serve target: vllm (default, builds vllm-rocm launch cmd) or "
+        help="Serve target: vllm (default, builds vllm-rocm launch cmd), "
+             "sglang (builds sglang-rocm launch cmd), or "
              "ollama (merges LoRA + calls `ollama create`).",
     ),
     tag: str = typer.Option(
@@ -377,16 +378,24 @@ def serve(
             )
         return
 
-    if to != "vllm":
+    if to not in ("vllm", "sglang"):
         console.print(f"[red]unknown serve target:[/red] {to}")
         raise typer.Exit(code=2)
-
-    from mindxtrain.deploy.vllm_launcher import build_vllm_command
 
     ckpt = checkpoint or Path("./out/runs") / cfg.meta.run_name / "quantized"
     if not ckpt.exists():
         console.print(f"[red]quantized checkpoint not found:[/red] {ckpt}")
         raise typer.Exit(code=1)
+
+    if to == "sglang":
+        from mindxtrain.deploy.sglang_rocm import build_sglang_command
+
+        cmd = build_sglang_command(cfg.serve, ckpt)
+        console.print(f"[green]sglang cmd:[/green] {' '.join(cmd)}")
+        return
+
+    from mindxtrain.deploy.vllm_launcher import build_vllm_command
+
     cmd = build_vllm_command(cfg.serve, ckpt, cfg.quantize)
     console.print(f"[green]vllm cmd:[/green] {' '.join(cmd)}")
     # Caller can pipe the cmd into their orchestrator; we don't exec by default.
@@ -542,13 +551,24 @@ def receipt(
 
     cfg = load_config(config)
     run_dir = Path("./out/runs") / cfg.meta.run_name
+
+    # A run-emitted manifest snapshots the validated config to
+    # config.snapshot.yaml and persists the exact AutotunePlan bytes it hashed.
+    # Prefer those when present; fall back to the user-supplied --config for
+    # legacy manifests produced by `emit_receipt`.
+    snapshot = run_dir / "config.snapshot.yaml"
+    config_yaml_path = snapshot if snapshot.is_file() else config
+    plan_path = run_dir / "autotune_plan.json"
+    plan_json = plan_path.read_bytes() if plan_path.is_file() else None
+
     try:
         result = verify_receipt(
             m,
-            config_yaml_path=config,
+            config_yaml_path=config_yaml_path,
             dataset_manifest_path=run_dir / "dataset_manifest.json",
             checkpoint_dir=run_dir / "checkpoint",
             eval_json_path=run_dir / "eval/lm_eval.json",
+            plan_json=plan_json,
         )
     except FileNotFoundError as exc:
         console.print(f"[red]missing artifact:[/red] {exc}")
@@ -556,6 +576,87 @@ def receipt(
     console.print_json(data=result)
     if not all(result.values()):
         raise typer.Exit(code=2)
+
+
+@app.command()
+def imprint(
+    config: Path = typer.Argument(..., help="recipe whose checkpoint to measure"),
+    out: Path = typer.Option(Path("./out/runs"), "--out", "-o"),
+    max_inquiries: int = typer.Option(5, "--n", help="number of recall probes"),
+    trigger_dream: bool = typer.Option(
+        False, "--trigger-dream",
+        help="hand the imprinted actor to mindX's machine.dream 8hr cycle",
+    ),
+) -> None:
+    """Measure a persona imprint: recall before vs after training.
+
+    Poses the script's own user-turns back to the actor, comparing the base
+    model (before) and the trained adapter (after) against the script's
+    assistant voice. Prints an ImprintReport; exit 4 if no imprint was detected.
+    """
+    import json as _json
+
+    cfg = load_config(config)
+    run_dir = (out / cfg.meta.run_name) if out.name == "runs" else out
+    adapter_dir = run_dir / "checkpoint"
+    if not adapter_dir.exists():
+        console.print(f"[red]no checkpoint to measure:[/red] {adapter_dir}")
+        raise typer.Exit(code=1)
+
+    # Build inquiries (user-turns) + baseline voice (assistant-turns) from the
+    # local script the actor trained on. Falls back to default probes.
+    from mindxtrain.eval.imprint import default_inquiries, probe_recall, score_imprint
+
+    inquiries: list[str] = []
+    baseline: list[str] = []
+    path = cfg.data.path
+    if path is not None and Path(path).exists():
+        files = [Path(path)] if Path(path).is_file() else sorted(Path(path).rglob("*.jsonl"))
+        for f in files:
+            for line in f.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                msgs = row.get("messages", [])
+                u = next((m["content"] for m in msgs if m.get("role") == "user"), None)
+                a = next((m["content"] for m in msgs if m.get("role") == "assistant"), None)
+                if u and len(inquiries) < max_inquiries:
+                    inquiries.append(u)
+                if a:
+                    baseline.append(a)
+    if not inquiries:
+        inquiries = default_inquiries(cfg.meta.project)[:max_inquiries]
+
+    console.print(f"[cyan]probing {len(inquiries)} inquiries (before/after)…[/cyan]")
+    try:
+        before = probe_recall(cfg.model.name, inquiries, force_cpu=True)
+        after = probe_recall(cfg.model.name, inquiries, adapter_dir=adapter_dir, force_cpu=True)
+    except RuntimeError as exc:
+        console.print(f"[red]imprint probe failed:[/red] {exc}")
+        raise typer.Exit(code=3) from exc
+
+    report = score_imprint(inquiries, before, after, baseline or before)
+    console.print_json(data=report.model_dump())
+
+    if trigger_dream:
+        from mindxtrain.deploy.api_client import trigger_dream_ingestion
+
+        res = trigger_dream_ingestion(
+            run_id=cfg.meta.run_name,
+            adapter_dir=str(adapter_dir),
+            base_model=cfg.model.name,
+            persona_name=cfg.meta.project,
+            imprint_delta=report.imprint_delta,
+        )
+        console.print(f"[green]dream trigger:[/green] {res}")
+
+    if not report.imprinted:
+        console.print("[yellow]no imprint detected (delta<=0 or no shift)[/yellow]")
+        raise typer.Exit(code=4)
 
 
 # ---- github / droplet (source-tree publishing + remote provision) -------

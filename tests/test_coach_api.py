@@ -31,6 +31,56 @@ def test_coach_static_files_served():
     assert "loadRecipes" in r_js.text
 
 
+def test_coach_index_includes_receipt_card():
+    r = client.get("/coach/")
+    assert r.status_code == 200
+    assert 'id="step-receipt"' in r.text
+    assert 'id="receipt-badge"' in r.text
+    # Chat re-probe affordance.
+    assert 'id="chat-recheck"' in r.text
+
+
+def test_coach_js_wires_receipt_loader():
+    r = client.get("/coach/static/coach.js")
+    assert r.status_code == 200
+    assert "loadReceiptForRun" in r.text
+    assert "/coach/api/receipt/" in r.text
+
+
+def test_coach_train_diagnostics_accordions():
+    r = client.get("/coach/")
+    assert r.status_code == 200
+    # Per-step metrics table is now a collapsible accordion with a live count.
+    assert 'id="metrics-table-wrap"' in r.text
+    assert 'id="metrics-table-count"' in r.text
+    assert 'id="train-log-count"' in r.text
+    assert 'id="chart-window-note"' in r.text
+
+
+def test_coach_js_caps_and_counts():
+    r = client.get("/coach/static/coach.js")
+    assert r.status_code == 200
+    # Honest compression: rolling chart window + per-step/line counters.
+    assert "MAX_CHART_POINTS" in r.text
+    assert "_updateMetricsTableCount" in r.text
+    assert "_updateLogCount" in r.text
+
+
+def test_coach_index_has_create_script_card():
+    r = client.get("/coach/")
+    assert r.status_code == 200
+    assert 'id="step-create-dataset"' in r.text
+    assert 'id="ds-save"' in r.text
+    assert 'id="ds-exchanges"' in r.text
+
+
+def test_coach_js_wires_create_dataset():
+    r = client.get("/coach/static/coach.js")
+    assert r.status_code == 200
+    assert "wireCreateDataset" in r.text
+    assert "/coach/api/datasets" in r.text
+
+
 def test_recipes_list_includes_known_recipes():
     r = client.get("/coach/api/recipes")
     assert r.status_code == 200

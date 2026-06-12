@@ -137,6 +137,67 @@ def test_config_yaml_input(monkeypatch):
     assert r.json()["recipe"].startswith("adhoc:")
 
 
+def test_x402_gate_returns_402_when_unpaid(monkeypatch):
+    monkeypatch.setattr(training_api, "_spawn_for_backend", _no_op_spawn)
+    monkeypatch.setenv("MINDXTRAIN_X402_REQUIRED", "1")
+    r = client.post(
+        "/v1/training/jobs",
+        json={"recipe": "mindx_fallback_qwen3_1_5b_cpu_smoke"},
+    )
+    assert r.status_code == 402, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "payment required"
+    assert detail["invoice"]["amount_usdc"] > 0
+    assert detail["invoice"]["asset_id"] == 203977300
+
+
+def test_x402_gate_off_by_default(monkeypatch):
+    monkeypatch.setattr(training_api, "_spawn_for_backend", _no_op_spawn)
+    assert os.environ.get("MINDXTRAIN_X402_REQUIRED", "") == ""
+    r = client.post(
+        "/v1/training/jobs",
+        json={"recipe": "mindx_fallback_qwen3_1_5b_cpu_smoke"},
+    )
+    assert r.status_code == 200
+
+
+def test_x402_gate_validates_settlement_when_tx_present(monkeypatch):
+    monkeypatch.setattr(training_api, "_spawn_for_backend", _no_op_spawn)
+    monkeypatch.setenv("MINDXTRAIN_X402_REQUIRED", "1")
+
+    # Stub the on-chain validation (real path needs --extra chain + a live tx).
+    from mindxtrain.provenance import x402
+
+    def _fake_validate(tx_id, **_kw):
+        return x402.Settlement(tx_id=tx_id, amount_usdc=1.0, confirmed=True)
+
+    monkeypatch.setattr(x402, "validate_settlement", _fake_validate)
+    r = client.post(
+        "/v1/training/jobs",
+        json={
+            "recipe": "mindx_fallback_qwen3_1_5b_cpu_smoke",
+            "settlement_tx": "FAKE_TX_ID",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_trl_local_routes_to_inprocess(monkeypatch):
+    """A trl_local recipe takes the in-process spawn branch (like trl_cpu)."""
+    seen = {}
+
+    def _fake_inprocess(run, cfg, plan):
+        seen["backend"] = cfg.train.backend
+
+    monkeypatch.setattr(training_api, "_spawn_inprocess_cpu", _fake_inprocess)
+    r = client.post(
+        "/v1/training/jobs",
+        json={"recipe": "mindx_fallback_qwen3_1_5b_local"},
+    )
+    assert r.status_code == 200, r.text
+    assert seen.get("backend") == "trl_local"
+
+
 def test_cancel_job(monkeypatch):
     monkeypatch.setattr(training_api, "_spawn_for_backend", _no_op_spawn)
     r = client.post("/v1/training/jobs", json={"recipe": "mindx_fallback_qwen3_1_5b_cpu_smoke"})

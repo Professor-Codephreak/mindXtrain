@@ -1,6 +1,6 @@
 [project]
 name = "mindxtrain"
-version = "0.1.0"
+version = "1.0.0"
 description = "Production training framework for aGLM-BANKON derivatives. AMD x lablab.ai hackathon, May 4-10 2026."
 requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }

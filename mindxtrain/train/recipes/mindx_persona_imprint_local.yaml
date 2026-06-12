@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+# Persona-imprint recipe — the minimal "production test 1" loop.
+#
+# Model = actor. Persona = identity/voice. Script = the local JSONL you author
+# (in Coach: "Create script", or via mindxtrain.data.scripts.author_script).
+# Training imprints the persona onto the tiny actor; measure the imprint with
+# `mindxtrain.eval.imprint` (recall before vs after).
+#
+# Author a script first, then point this recipe at it:
+#   - Coach "Create script" writes ./out/datasets/<name>/script.jsonl
+#   - set data.path below to that file (or a directory of *.jsonl)
+#
+# Device-aware (trl_local): uses a local GPU if present, else CPU. Tiny by
+# design so a laptop can imprint in minutes — this is a smoke/production test,
+# not a full fine-tune.
+meta:
+  project: mindx_persona_imprint
+  run_name: mindx_persona_imprint_local
+  seed: 2048
+  license: apache-2.0
+  description: >-
+    Imprint a persona onto SmolLM2-135M from a hand-authored local script.
+    The first end-to-end production test of the create-dataset → imprint →
+    measure loop.
+
+hardware:
+  name: consumer_gpu
+  gfx_arch: gfx1100
+  gpus: 1
+  expected_hbm_gb: 16
+
+autotune:
+  enabled: false
+  budget_seconds: 60
+  policy: aot_only
+
+model:
+  name: HuggingFaceTB/SmolLM2-135M
+  attn_implementation: eager
+  torch_dtype: float32
+  trust_remote_code: false
+
+data:
+  source: local
+  # Point at the script Coach authored (file or directory of *.jsonl).
+  path: ./out/datasets/codephreak/script.jsonl
+  max_samples: 64
+  seq_len: 256
+  packing: false
+  eval_split: null
+
+train:
+  backend: trl_local
+  logging_steps: 1
+  method:
+    kind: lora
+    # Imprinting a persona onto a tiny actor is deliberate memorization — a
+    # bigger rank + more epochs + grad_accum 1 (so a few-row script still does
+    # many optimizer steps) is what makes the imprint actually take and register
+    # in the recall measurement.
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  optimizer:
+    name: adamw_torch
+    lr: 3.0e-4
+  schedule:
+    type: cosine
+    warmup_ratio: 0.03
+    epochs: 12
+  batch:
+    per_device: 1
+    grad_accum: 1
+  precision: bfloat16
+  gradient_checkpointing: false
+  flash_attention:
+    backend: ck
+  fsdp:
+    enabled: false
+  cpu_throttle:
+    percent: 50
+    nice_level: 10
+    omp_proc_bind: true
+  env: {}
+
+eval:
+  harness:
+    tasks: [mmlu]
+    fewshot: 0
+  regression:
+    baseline: ""
+    threshold_pct: -100.0
+
+quantize:
+  enabled: false
+  scheme: none
+  ptpc: false
+
+serve:
+  backend: vllm-rocm
+  reasoning_parser: none
+  tool_call_parser: none
+  tensor_parallel: 1
+  max_model_len: 2048
+  port: 8000
+
+publish:
+  enabled: false
+
+receipt:
+  output: ./out/receipt.json
+  include:
+    - yaml_hash
+    - dataset_cids

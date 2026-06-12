@@ -27,9 +27,15 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field, model_validato
 
 # ---- enums / literals -------------------------------------------------------
 
-GfxArch = Literal["gfx942", "gfx950"]
-HardwareName = Literal["mi300x", "mi325x", "mi350x", "mi355x"]
-TrainingBackend = Literal["axolotl", "unsloth", "torchtune", "primus", "trl_cpu"]
+# gfx9xx = CDNA datacenter (MI-series); gfx10xx/11xx = RDNA consumer Radeon;
+# gfx90c = integrated Vega APU (descriptive only — the in-process `trl_local`
+# lane never injects the MI300X env vars, so a consumer arch is just metadata).
+GfxArch = Literal[
+    "gfx900", "gfx90c", "gfx942", "gfx950",
+    "gfx1030", "gfx1100", "gfx1101", "gfx1102", "gfx1103",
+]
+HardwareName = Literal["mi300x", "mi325x", "mi350x", "mi355x", "consumer_gpu", "local"]
+TrainingBackend = Literal["axolotl", "unsloth", "torchtune", "primus", "trl_cpu", "trl_local"]
 DType = Literal["bfloat16", "float16", "float32", "fp8_e4m3", "mxfp4"]
 AttentionBackend = Literal["ck", "triton", "aiter"]
 AttnImplementation = Literal["flash_attention_2", "sdpa", "eager"]
@@ -90,7 +96,9 @@ class HardwareCfg(BaseModel):
             "1 or 8 = MI300X. 2/4 rejected: xGMI bandwidth is asymmetric."
         ),
     )
-    expected_hbm_gb: int = Field(default=192, ge=64)
+    # MI300X is 192 GB HBM3; consumer Radeon/RTX cards are 8-24 GB, so the floor
+    # is low enough for the `trl_local` lane to declare real VRAM honestly.
+    expected_hbm_gb: int = Field(default=192, ge=8)
 
 
 # ---- autotune ---------------------------------------------------------------

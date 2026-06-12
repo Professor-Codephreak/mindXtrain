@@ -4,9 +4,44 @@ All notable changes to **mindxtrain** are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] — 2026-06-11
 
-### Added
+First production release. **CPU training is active end-to-end**; the GPU
+(MI300X / consumer) path is code-complete and validated on CPU dry-run + unit
+tests, pending real ROCm hardware to execute. Honest per-module status is in
+[`docs/actualization_status.md`](docs/actualization_status.md).
+
+### Added (1.0.0)
+
+- **Device-aware local-GPU lane** (`trl_local`,
+  `mindxtrain.train.backend_trl_cpu.run_trl_local`). Auto-detects a consumer GPU
+  (CUDA or ROCm Radeon, bf16/fp16) and falls back to CPU; `trl_cpu` is the
+  force-CPU wrapper. Recipe `mindx_fallback_qwen3_1_5b_local`. Honest limit:
+  integrated Vega/`gfx90c` APUs are unsupported and fall back to CPU.
+- **Verifiable training receipt.** Every operator/CPU run emits `manifest.json`
+  binding the frozen `AutotunePlan` hash to the checkpoint + config hashes
+  (`provenance.manifest.emit_receipt_for_run`); re-verified via `mindxtrain
+  receipt`, the `GET /coach/api/receipt/{run_id}` endpoint, and a Coach
+  "Verifiable receipt" card. Optional x402 metering gate on `/v1/training/jobs`.
+- **Actor / persona / script + imprint.** Author a training *script* for an
+  *actor* (`mindxtrain.data.scripts`), ingest as `source: local`, and measure the
+  persona **imprint** by recall before/after training
+  (`mindxtrain.eval.imprint`, `mindxtrain imprint`,
+  `POST /coach/api/imprint/score`). Coach **Create script** card +
+  `POST/GET /coach/api/datasets`. Recipe `mindx_persona_imprint_local`.
+- **mindX dream-cycle trigger** (`deploy.api_client.trigger_dream_ingestion`) —
+  hands an imprinted actor to mindX's `machine.dream` 8hr cycle via HTTP or an
+  inbox drop (clean-room: a pointer, never mindX code). `mindxtrain imprint
+  --trigger-dream`.
+- **Coach live-training diagnostics** — accurate depiction with accordion
+  compression: rolling loss-chart window, per-step metrics + log accordions with
+  honest "showing last N" counts, system-metric sparklines, chat re-probe.
+- **Autotune on real hardware** — runtime GPU-count autodetect (`rccl_probe`),
+  GEMM microbenchmark with timings (`gemm_probe`), `serve --to sglang`.
+- **Clean-room policy** codified in `CLAUDE.md` + `AGENTS.md`: reimplement/adapt
+  locally, never copy mindX/external source bytes.
+
+### Added (pre-1.0 foundation)
 
 - **mindX self-training loop.** `mindx_dreams` dataset source adapter walks
   `<mindx>/data/memory/ltm/*/*_training.jsonl`, deduplicates by content hash,

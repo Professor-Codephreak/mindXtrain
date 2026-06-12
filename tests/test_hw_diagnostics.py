@@ -207,11 +207,22 @@ def test_recommend_lane_prefers_amd_when_available():
     assert hw.recommend_lane(cpu, amd, nv) == "axolotl_amd"
 
 
-def test_recommend_lane_falls_back_to_cuda():
+def test_recommend_lane_consumer_radeon_uses_trl_local():
+    """A consumer Radeon (not Instinct/MI-class) → the in-process local lane."""
+    cpu = hw.CPUInfo()
+    amd = hw.AMDInfo(
+        available=True, gpus=[hw.AMDGPU(name="Radeon RX 7900 XTX", vram_gb=24)],
+    )
+    nv = hw.NVIDIAInfo(available=False)
+    assert hw.recommend_lane(cpu, amd, nv) == "trl_local"
+
+
+def test_recommend_lane_local_nvidia_uses_trl_local():
+    """Any local NVIDIA card → trl_local (no CUDA-axolotl subprocess path exists)."""
     cpu = hw.CPUInfo()
     amd = hw.AMDInfo(available=False)
-    nv = hw.NVIDIAInfo(available=True, gpus=[hw.NVIDIAGPU(name="H100", vram_gb=80)])
-    assert hw.recommend_lane(cpu, amd, nv) == "axolotl_cuda"
+    nv = hw.NVIDIAInfo(available=True, gpus=[hw.NVIDIAGPU(name="RTX 4090", vram_gb=24)])
+    assert hw.recommend_lane(cpu, amd, nv) == "trl_local"
 
 
 def test_recommend_lane_falls_back_to_cpu():

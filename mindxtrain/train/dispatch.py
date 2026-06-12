@@ -9,6 +9,9 @@ Lane selection happens at `cfg.train.backend`:
 - `trl_cpu` — CPU SFT/LoRA via TRL in-process. Real checkpoints, slow.
   Use for: mindX self-training, smoke-testing a recipe before burning AMD
   credits, anywhere a MI300X droplet isn't available.
+- `trl_local` — same in-process TRL trainer, but device-aware: uses a local
+  consumer GPU (CUDA or ROCm Radeon, bf16/fp16) when one is visible, else falls
+  back to CPU. One recipe runs on a laptop or a gaming GPU unchanged.
 
 The CPU lane is paired with `hardware.gpus: 0` in the recipe. The dispatcher
 itself does not enforce that pairing — the recipe is the source of truth —
@@ -53,5 +56,9 @@ def dispatch_training(
         from mindxtrain.train.backend_trl_cpu import run_trl_cpu
 
         return run_trl_cpu(cfg, plan, out_dir)
+    if backend == "trl_local":
+        from mindxtrain.train.backend_trl_cpu import run_trl_local
+
+        return run_trl_local(cfg, plan, out_dir)
     msg = f"unknown backend {backend!r}"
     raise ValueError(msg)

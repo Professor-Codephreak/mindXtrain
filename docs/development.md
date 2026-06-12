@@ -65,7 +65,7 @@ follow it.
 uv sync                                                    # base install
 uv run ruff check --fix .                                  # lint + auto-fix
 uv run mypy mindxtrain/config mindxtrain/provenance        # types where strict
-uv run pytest -q                                           # → 112 passed in ~5s
+uv run pytest -q                                           # → 564 passed in ~5s
 ```
 
 CI runs the same four commands on Ubuntu 24.04 / Python 3.12 (CPU-only).
@@ -97,7 +97,7 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 ├── contracts/                    # Foundry workspace (ERC-8004 attestation)
 ├── ops/                          # containerfiles, compose, k8s, vmm, gensyn
 ├── examples/                     # demo YAMLs
-├── tests/                        # pytest — 112 tests (CPU-only smoke)
+├── tests/                        # pytest — 566 tests (CPU-only smoke)
 └── docs/
     ├── *.md                      # current state (this directory)
     └── blueprints/               # source design briefs (frozen)
@@ -139,6 +139,32 @@ preference.
    `mindxtrain_registry.sol` is write-once. Rotating any parameter requires a
    fresh deploy.
 7. **Lazy imports for optional deps** — see the pattern above.
+
+## Training lanes (CPU / local-GPU / MI300X)
+
+Three ways to actually run a fine-tune, selected by `train.backend`:
+
+| Lane | Backend | Device | When |
+|------|---------|--------|------|
+| CPU | `trl_cpu` | CPU, float32 (in-process TRL) | mindX self-training, smoke runs, no GPU |
+| Local GPU | `trl_local` | auto: CUDA/ROCm GPU (bf16/fp16) else CPU fallback | consumer Radeon RX / NVIDIA RTX, or a laptop |
+| MI300X | `axolotl`/`unsloth`/`torchtune`/`primus` | gfx942 subprocess + 7 env vars | the AOT MI300X target |
+
+`trl_local` is the **device-aware** in-process lane (`backend_trl_cpu.py::run_trl_local`):
+it picks the GPU when `torch.cuda.is_available()` (ROCm surfaces through the same API),
+else logs `no accelerator detected → CPU fallback` and runs on CPU. The same recipe
+(`mindx_fallback_qwen3_1_5b_local`) therefore runs unchanged on a gaming GPU or a laptop.
+`trl_cpu` is `run_trl_local(..., force_cpu=True)`; `MINDXTRAIN_FORCE_CPU=1` forces the
+fallback anywhere. The in-process lanes never inject the seven MI300X env vars.
+
+Confirm which device a box will use:
+```bash
+uv run python -c "import torch; print(torch.cuda.is_available(), torch.version.hip)"
+```
+
+**Unsupported:** integrated Vega/RDNA APUs (e.g. Ryzen "Raven"/`gfx90c`) are not ROCm
+targets and fall back to CPU. A discrete RX 6800/7900 (`gfx1030`/`gfx1100`) or any NVIDIA
+RTX is the intended consumer GPU.
 
 ## Adding a new recipe
 

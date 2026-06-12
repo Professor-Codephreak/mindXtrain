@@ -30,6 +30,15 @@ const METRICS_BUFFER_CAP = 300;
 
 const MAX_LOG_LINES = 2000;
 
+// Per-step rows kept in the (collapsed) metrics table DOM. The full count is
+// always reported in the accordion summary so the cap is never silent.
+const MAX_TABLE_ROWS = 50;
+
+// Loss-chart points retained. A real MI300X run logs thousands of steps; an
+// unbounded canvas dataset makes the page janky. We keep a rolling window and
+// surface "showing last X of N" so the compression is honest, not hidden.
+const MAX_CHART_POINTS = 1500;
+
 // When a log accumulates more than this many lines, auto-collapse the
 // oldest ~80% into a folded sub-accordion so the operator's eye stays on
 // the most recent activity. Tuned to keep the "live tail" UX legible on
@@ -102,11 +111,13 @@ const STAGE_FOR_STEP = {
   "step-preflight":    "automind",
   "step-hardware":     "automind",
   "step-dream-corpus": "automind",
+  "step-create-dataset": "automind",
   "step-recipes":      "mind",
   "step-autotune":     "mind",
   "step-compile":      "mind",
   "step-deploy":       "mind",
   "step-train":        "mind",
+  "step-receipt":      "cust",
   "step-mei":          "cust",
   "step-cost":         "cust",
   "step-chat":         "cust",
@@ -454,8 +465,8 @@ async function runHardware() {
       _hwPanelHTML("NVIDIA GPU", nv, { entries: nvEntries, gpus: nvGPUs });
 
     const laneLabel = {
-      "axolotl_amd": "AMD GPU (axolotl)",
-      "axolotl_cuda": "NVIDIA GPU (axolotl)",
+      "axolotl_amd": "AMD MI300X (axolotl)",
+      "trl_local": "local GPU (trl_local)",
       "trl_cpu": "CPU (trl_cpu)",
     }[p.recommended_lane] || p.recommended_lane;
     rec.innerHTML = `Recommended lane: <strong>${laneLabel}</strong>`;
@@ -465,17 +476,17 @@ async function runHardware() {
 
     // Auto-suggest a matching recipe so the operator gets a one-click
     // training start. Recipe ↔ lane mapping:
-    //   trl_cpu      → mindx_fallback_qwen3_1_5b_cpu_real  (full ~2 hr fine-tune)
-    //   axolotl_amd  → mindx_fallback_qwen3_1_5b_sft_lora  (1× MI300X)
-    //   axolotl_cuda → mindx_fallback_qwen3_1_5b_sft_lora  (best available)
+    //   trl_cpu     → mindx_fallback_qwen3_1_5b_cpu_real  (full ~2 hr CPU fine-tune)
+    //   trl_local   → mindx_fallback_qwen3_1_5b_local     (device-aware: consumer GPU else CPU)
+    //   axolotl_amd → mindx_fallback_qwen3_1_5b_sft_lora  (1× MI300X)
     // The _smoke recipe stays available in the grid for tests + CI — UI
     // just doesn't recommend it because it won't actually adapt the model.
     // If the recipes haven't loaded yet, retry briefly — loadRecipes() is
     // racing with us on page bootstrap.
     const laneToRecipe = {
       "trl_cpu": "mindx_fallback_qwen3_1_5b_cpu_real",
+      "trl_local": "mindx_fallback_qwen3_1_5b_local",
       "axolotl_amd": "mindx_fallback_qwen3_1_5b_sft_lora",
-      "axolotl_cuda": "mindx_fallback_qwen3_1_5b_sft_lora",
     };
     const recipeName = laneToRecipe[p.recommended_lane];
     if (recipeName) {
@@ -735,19 +746,47 @@ function pushPoint(ev) {
     `<td>${ent != null ? ent.toFixed(3) : "&mdash;"}</td>` +
     `<td>${ev.lr ?? "&mdash;"}</td><td>${ev.grad_norm ?? "&mdash;"}</td>`;
   tbody.appendChild(tr);
-  // Cap table to last 50 rows.
-  while (tbody.children.length > 50) tbody.removeChild(tbody.firstChild);
+  // Cap the DOM table; report the true total in the accordion summary so the
+  // cap is visible rather than silent.
+  while (tbody.children.length > MAX_TABLE_ROWS) tbody.removeChild(tbody.firstChild);
+  // Buffer for the terminal result banner (kept whole so loss A→B is exact).
+  state.stepBuffer.push({ step: ev.step, loss: ev.loss, mean_token_accuracy: acc });
+  _updateMetricsTableCount(state.stepBuffer.length);
+
   const chart = ensureChart();
   if (chart) {
     chart.data.labels.push(ev.step);
     chart.data.datasets[0].data.push(ev.loss);
     // accuracy on the 2nd axis — NaN where the backend didn't report it.
     chart.data.datasets[1].data.push(acc != null ? acc : NaN);
+    // Roll the window so a thousands-of-steps run stays responsive.
+    let trimmed = false;
+    while (chart.data.labels.length > MAX_CHART_POINTS) {
+      chart.data.labels.shift();
+      chart.data.datasets[0].data.shift();
+      chart.data.datasets[1].data.shift();
+      trimmed = true;
+    }
+    if (trimmed) {
+      const note = $("#chart-window-note");
+      if (note) {
+        note.hidden = false;
+        note.textContent =
+          `showing last ${MAX_CHART_POINTS} of ${state.stepBuffer.length} steps`;
+      }
+    }
     chart.update("none");
   }
-  // Buffer for the terminal result banner.
-  state.stepBuffer.push({ step: ev.step, loss: ev.loss, mean_token_accuracy: acc });
   _updateProgress(ev);
+}
+
+function _updateMetricsTableCount(total) {
+  const el = $("#metrics-table-count");
+  if (!el) return;
+  const plural = total === 1 ? "" : "s";
+  el.textContent = total > MAX_TABLE_ROWS
+    ? `(${total} step${plural} · last ${MAX_TABLE_ROWS} shown)`
+    : `(${total} step${plural})`;
 }
 
 function appendLog(ev) {
@@ -766,7 +805,17 @@ function appendLog(ev) {
   if (state.logLines % 50 === 0) {
     _foldLogElement(pre);
   }
+  _updateLogCount();
   pre.scrollTop = pre.scrollHeight;
+}
+
+function _updateLogCount() {
+  const el = $("#train-log-count");
+  if (!el) return;
+  const n = state.logLines;
+  el.textContent = n >= MAX_LOG_LINES
+    ? `(${n} lines · oldest dropped)`
+    : `(${n} line${n === 1 ? "" : "s"})`;
 }
 
 function subscribeRun(runId) {
@@ -803,6 +852,9 @@ function subscribeRun(runId) {
         // before (or in parallel with) MEI scoring.
         const pushWrap = $("#push-to-ollama-wrap");
         if (pushWrap) pushWrap.hidden = false;
+        // Receipt was emitted at completion — populate the verification card
+        // in place (no scroll; it sits between train and MEI).
+        loadReceiptForRun(state.run && state.run.id);
         // Train succeeded — MEI scoring is the gate before promotion.
         progressTo("step-mei");
         loadMEIForRun(state.run && state.run.id);
@@ -823,6 +875,10 @@ async function runTrain() {
   $("#train-log").textContent = "";
   $("#metrics-table tbody").innerHTML = "";
   state.logLines = 0;
+  _updateLogCount();
+  _updateMetricsTableCount(0);
+  const chartNote = $("#chart-window-note");
+  if (chartNote) { chartNote.hidden = true; chartNote.textContent = ""; }
   if (state.chart) {
     state.chart.data.labels = [];
     state.chart.data.datasets[0].data = [];
@@ -1585,6 +1641,145 @@ async function loadMEIForRun(runId) {
   }
 }
 
+// Short BLAKE3 view: first 8 + last 8 hex chars, or a dash when absent.
+function _shortHash(h) {
+  if (!h) return "—";
+  return h.length > 20 ? `${h.slice(0, 8)}…${h.slice(-8)}` : h;
+}
+
+const RECEIPT_HASH_LABELS = {
+  config_yaml: "config",
+  checkpoint: "checkpoint",
+  autotune_plan: "autotune plan",
+  dataset: "dataset",
+  eval_json: "eval",
+};
+
+async function loadReceiptForRun(runId) {
+  const empty = $("#receipt-empty");
+  const body = $("#receipt-card-body");
+  const badge = $("#receipt-badge");
+  const list = $("#receipt-hashes");
+  if (!runId) {
+    if (empty) empty.textContent = "no active run";
+    return;
+  }
+  try {
+    const view = await getJSON(`/coach/api/receipt/${encodeURIComponent(runId)}`);
+    state.receipt = view;
+    if (empty) empty.hidden = true;
+    if (body) body.hidden = false;
+    if (badge) {
+      badge.hidden = false;
+      badge.textContent = view.verified ? "verified ✓" : "unverified";
+      badge.className = "badge-status " + (view.verified ? "succeeded" : "failed");
+    }
+    if (list) {
+      list.innerHTML = "";
+      for (const [field, value] of Object.entries(view.hashes)) {
+        const ok = view.checks[field];
+        const li = document.createElement("li");
+        const label = RECEIPT_HASH_LABELS[field] || field;
+        const mark = value ? (ok ? "✓" : "✗") : "·";
+        li.innerHTML =
+          `<code>${mark} ${label}</code>` +
+          `<span class="mono">${_shortHash(value)}</span>`;
+        list.appendChild(li);
+      }
+    }
+  } catch (e) {
+    // 409 = run finished but no manifest (rare best-effort emit failure);
+    // 404 = unknown run. Either way, leave the card in its waiting state.
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = "no receipt for this run yet";
+    }
+    if (body) body.hidden = true;
+  }
+}
+
+// --- create script (dataset authoring) -----------------------------------
+
+function _parseExchanges(text) {
+  const out = [];
+  for (const raw of (text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const i = line.indexOf(":::");
+    if (i < 0) continue;
+    const user = line.slice(0, i).trim();
+    const assistant = line.slice(i + 3).trim();
+    if (user && assistant) out.push({ user, assistant });
+  }
+  return out;
+}
+
+function _linesToList(text) {
+  return (text || "").split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+async function seedFromPersona() {
+  try {
+    const p = await getJSON("/coach/api/persona");
+    if (p.name) $("#ds-persona-name").value = p.name;
+    if (p.system_prompt) $("#ds-system").value = p.system_prompt;
+    if (Array.isArray(p.voice_examples)) $("#ds-voice").value = p.voice_examples.join("\n");
+    $("#ds-status").textContent = `seeded from persona "${p.name}"`;
+  } catch (e) {
+    $("#ds-status").textContent = "no persona available (set MINDXTRAIN_PERSONA_PATH)";
+  }
+}
+
+async function saveScript() {
+  const status = $("#ds-status");
+  const body = {
+    name: $("#ds-name").value.trim() || "script",
+    persona_name: $("#ds-persona-name").value.trim() || "actor",
+    system_prompt: $("#ds-system").value.trim(),
+    voice_examples: _linesToList($("#ds-voice").value),
+    exchanges: _parseExchanges($("#ds-exchanges").value),
+    seed_voice: $("#ds-seed-voice").checked,
+  };
+  if (!body.exchanges.length && !(body.seed_voice && body.voice_examples.length)) {
+    status.textContent = "add at least one exchange (user ::: assistant) or a voice example";
+    return;
+  }
+  status.textContent = "saving…";
+  try {
+    const info = await postJSON("/coach/api/datasets", body);
+    status.textContent = `✓ ${info.rows} rows → ${info.path} — set this as data.path`;
+    refreshDatasets();
+  } catch (e) {
+    status.textContent = `save failed: ${e}`;
+  }
+}
+
+async function refreshDatasets() {
+  const list = $("#ds-list");
+  if (!list) return;
+  try {
+    const rows = await getJSON("/coach/api/datasets");
+    list.innerHTML = "";
+    if (!rows.length) { list.hidden = true; return; }
+    for (const s of rows) {
+      const li = document.createElement("li");
+      li.innerHTML = `<code>${s.name}</code><span class="mono">${s.rows} rows · ${s.path}</span>`;
+      list.appendChild(li);
+    }
+    list.hidden = false;
+  } catch (e) {
+    list.hidden = true;
+  }
+}
+
+function wireCreateDataset() {
+  const save = $("#ds-save");
+  const seed = $("#ds-seed-persona");
+  if (save) save.addEventListener("click", saveScript);
+  if (seed) seed.addEventListener("click", seedFromPersona);
+  refreshDatasets();
+}
+
 async function refreshMEIHistory() {
   const wrap = $("#mei-history-wrap");
   const tbody = $("#mei-history-table tbody");
@@ -1687,10 +1882,20 @@ window.addEventListener("DOMContentLoaded", () => {
   if (pushBtn) pushBtn.addEventListener("click", pushTrainedRunToOllama);
   $("#run-cost").addEventListener("click", runCost);
   $("#chat-send").addEventListener("click", sendChat);
+  const chatRecheck = $("#chat-recheck");
+  if (chatRecheck) {
+    chatRecheck.addEventListener("click", () => {
+      $("#chat-status").textContent = "re-probing…";
+      probeChat();
+    });
+  }
   $("#mei-refresh").addEventListener("click", () => {
     loadMEIForRun(state.run && state.run.id);
   });
   $("#mei-promote").addEventListener("click", promoteCurrentMEI);
+
+  // Create script (dataset authoring).
+  wireCreateDataset();
 
   // Deploy section.
   $("#run-github").addEventListener("click", runGithubPush);

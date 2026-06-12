@@ -1,7 +1,8 @@
 """SGLang-ROCm launcher — alternative to vLLM for serving.
 
-Day 5+ stub. SGLang ships explicit `rocm/sgl-dev:v0.5.8.post1-rocm720-mi30x` images.
-Pairs with the Mooncake distributed-KV-cache plugin used by AMD/Xiaomi MiMo-V2.5-Pro.
+Wired into `mindxtrain serve --to sglang`. SGLang ships explicit
+`rocm/sgl-dev:v0.5.8.post1-rocm720-mi30x` images. Pairs with the Mooncake
+distributed-KV-cache plugin used by AMD/Xiaomi MiMo-V2.5-Pro.
 """
 
 from __future__ import annotations

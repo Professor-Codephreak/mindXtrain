@@ -16,4 +16,4 @@ Layout per mindXtrain2.md §Part 4 "Repository layout":
     budget/      psutil-derived ResourceBudget (carry-over from aGLM)
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

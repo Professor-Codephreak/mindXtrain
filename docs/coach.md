@@ -26,14 +26,20 @@ The chat panel stays disabled until `MINDXTRAIN_BACKEND=vllm` is set and a vLLM-
 ```
 mindxtrain/operator/coach/
 ├── __init__.py            # exports the FastAPI router
-├── api.py                 # routes (recipes / bench / compile / cost / health)
+├── api.py                 # routes (recipes / bench / compile / cost / health /
+│                          #   runs / metrics / receipt / sea-decision / mei / diagnostics)
+├── run_metrics.py         # 1 Hz system-metrics sampler (psutil + /proc)
+├── chronos_client.py      # mindX promised-time client
 └── static/
-    ├── index.html         # five-step SPA shell
+    ├── index.html         # multi-card SPA shell (preflight → … → train → receipt → chat)
     ├── style.css          # minimal dark-friendly CSS, AMD orange accent
     └── coach.js           # vanilla JS state machine, no framework
 ```
 
-The Coach mounts under `/coach/`; static assets are at `/coach/static/*`.
+The Coach mounts under `/coach/`; static assets are at `/coach/static/*`. The UI
+has grown well past the original five-step demo: it now covers preflight, hardware
+detection, dream-corpus stats, recipe pick, autotune, compile, **live training with
+diagnostic feedback**, the **verifiable receipt**, MEI scoring, cost, deploy, and chat.
 
 ## Routes
 
@@ -48,18 +54,101 @@ The Coach mounts under `/coach/`; static assets are at `/coach/static/*`.
 | POST   | `/coach/api/compile`                | `{recipe, plan?}`         | `{recipe, config_summary, plan, axolotl_yaml, overrides}` |
 | POST   | `/coach/api/cost`                   | `{gpus, hours, safety_margin}` | `{mi300x, h100, h200, speedup_vs_h100_x}`  |
 | GET    | `/coach/api/health`                 | —                         | `{coach_version, chat_backend_ready, recipes_available}` |
+| POST   | `/coach/api/runs/launch`            | `{recipe, plan?, out_dir?}` | `Run` snapshot (spawns training)         |
+| GET    | `/coach/api/runs/{id}/events`       | —                         | SSE stream (`status`/`step`/`eval`/`log`/`metrics`/`energy`) |
+| GET    | `/coach/api/runs/{id}/metrics`      | `?since=`                 | system-metrics backfill for the sparklines |
+| GET    | `/coach/api/receipt/{run_id}`       | —                         | `ReceiptView` — re-verified BLAKE3 hashes + `verified` |
+| GET    | `/coach/api/sea-decision`           | —                         | mindX SEA autonomous-training gate state   |
+| GET    | `/coach/api/mei/score/{run_id}`     | —                         | `MEIScoreView` (mindX Efficiency Index)    |
+| GET    | `/coach/api/diagnostics/live`       | —                         | host load / RAM% / disk% / operator RSS    |
 
 The full schema is rendered at `/docs` (Swagger).
 
-## The five-step storyboard
+## Live training diagnostics
 
-The UI walks left-to-right through:
+The **Train (live)** card is the accurate, real-time depiction of a run. Events
+arrive over Server-Sent Events (`/coach/api/runs/{id}/events`) — `step`, `eval`,
+`log`, and 1 Hz `metrics` — and drive these surfaces:
 
-1. **Pick a recipe** — clickable grid of all 12 built-in recipes; the selected one's YAML expands inline.
+- **Session headline** — status badge, wall-clock + CPU-time elapsed, throttle%,
+  last loss, freshest eval. The at-a-glance "is it healthy" line.
+- **Phase + progress** — friendly phase narration ("Loading base model…",
+  "Training…", "Saving checkpoint…") plus a progress bar with `step N / total · ETA`,
+  driven by `StepEvent.total_steps`.
+- **Loss curve** (Chart.js) — dual-axis loss (orange) + `mean_token_accuracy`
+  (green, NaN-gapped where a backend omits it). The primary "is it learning" signal.
+
+Because a real MI300X run logs **thousands of steps**, the heavy detail is kept
+accurate but compressed behind accordions, with the truncation always shown — never
+silent:
+
+- **Loss curve** keeps a rolling window of the last `MAX_CHART_POINTS` (1500) points;
+  once it rolls, a `showing last 1500 of N steps` note appears under the chart.
+- **Per-step metrics** (step, loss, acc, entropy, lr, grad_norm) live in a collapsed
+  `<details>` accordion; the DOM table caps at 50 rows but the summary reports the
+  true total — `per-step metrics (N steps · last 50 shown)`.
+- **train.log (live tail)** is a `<details>` accordion that auto-folds older lines
+  and shows a running `(N lines)` count, capping the DOM at `MAX_LOG_LINES` (2000)
+  and labelling `· oldest dropped` once it does.
+- **System metrics** — five d3 sparklines (host cpu%/ram%/load, trainer rss MB,
+  trainer cpu-s/s) sampled at 1 Hz, in their own `<details>` (open by default).
+
+This keeps the page legible on a laptop while the underlying data stays faithful.
+
+## Verifiable receipt card
+
+When a run finishes, the operator emits `manifest.json` (BLAKE3 of the config
+snapshot, checkpoint, and the frozen `AutotunePlan`) into the run directory. The
+**Verifiable receipt** card fetches `/coach/api/receipt/{run_id}`, which re-hashes
+the on-disk artifacts and returns a `verified` flag plus the per-field checks. A
+`verified ✓` badge and the truncated hashes render in the card; the same check runs
+from a shell via `mindxtrain receipt out/runs/<run>/manifest.json --config <recipe>.yaml`.
+Binding the AutotunePlan hash to the checkpoint is the AOT-as-verification primitive —
+it proves which compiled backend/heuristic/RCCL config produced the weights.
+
+## Create script + imprint (actor / persona / script)
+
+mindXtrain (and Coach) **train models**. The model is an **actor**; an actor has a
+**persona** (identity / voice) and a **script** (the training examples — the
+"impression"). The **Create script** card authors a small script in the browser and
+saves it as `source: local` JSONL the recipes ingest.
+
+- **`POST /coach/api/datasets`** — `{name, persona_name, system_prompt, voice_examples,
+  exchanges:[{user,assistant}], seed_voice}` → writes
+  `out/datasets/<name>/script.jsonl` (override the root with `MINDXTRAIN_DATASETS_DIR`).
+  `GET /coach/api/datasets` lists them; `GET /coach/api/datasets/{name}` previews.
+- **`GET /coach/api/persona`** — pre-fills the form from `MINDXTRAIN_PERSONA_PATH`
+  (clean-room: recognised fields only, never copies mindX bytes).
+- Point the **`mindx_persona_imprint_local`** recipe's `data.path` at the saved script
+  and train the tiny actor (`trl_local`, CPU or local GPU).
+
+**Imprint = recall, before vs after.** Pose the script's own user-turns back to the
+actor and compare the base model (before) with the trained adapter (after) against the
+script's assistant voice:
+
+```bash
+mindxtrain imprint mindxtrain/train/recipes/mindx_persona_imprint_local.yaml
+```
+
+prints an `ImprintReport` (`before_voice`, `after_voice`, `imprint_delta`, `shift`,
+`imprinted`); exit 4 if no imprint took. `POST /coach/api/imprint/score` scores supplied
+utterances without blocking the event loop on inference. `mindxtrain imprint
+--trigger-dream` hands the imprinted actor to mindX's `machine.dream` 8-hour cycle (via
+`MINDXTRAIN_API_BASE_URL` `/v1/dream/ingest`, else a `data/incoming/` inbox drop under
+`MINDXTRAIN_MINDX_HOME`) — clean-room, an artifact pointer, never mindX code.
+
+## The core storyboard
+
+The original CPU-only demo path, top-to-bottom (the cards above and below it —
+preflight, hardware, dream-corpus, live training, receipt, MEI, deploy — flank it):
+
+1. **Pick a recipe** — clickable grid of all built-in recipes; the selected one's YAML expands inline.
 2. **Run the autotune probe** — single button; shows the `AutotunePlan` JSON plus a six-chip summary (`attention=ck`, `gemm=hipblaslt_default`, `rccl=1gpu_noop`, …).
 3. **Compile to Axolotl YAML** — translates `(recipe, plan)` into the trainer-side YAML, surfaces the plan-driven overrides as chips above the YAML.
-4. **Cost vs H100** — sliders for GPUs and hours; emits a three-row comparison table (MI300X / H100 / H200) with a headline like "MI300X is 5.4× cheaper than the H100 baseline".
-5. **Try the model** — chat panel that proxies to `/v1/chat/completions`. Stays disabled and explains why until the backend reports ready.
+4. **Train (live)** — spawns the run and streams the diagnostic feedback described in [Live training diagnostics](#live-training-diagnostics); on a CPU box the `trl_cpu` lane trains a small model in-process so the whole loop is demoable without a GPU. The `trl_local` lane is the device-aware variant — it uses a local consumer GPU (CUDA or ROCm Radeon) when present and falls back to CPU otherwise, so the same recipe runs on a laptop or a gaming GPU. `recommend_lane` sends an Instinct/MI300X card to `axolotl_amd` and any other local GPU to `trl_local`.
+5. **Verifiable receipt** — the `verified ✓` badge + bound hashes appear the moment the run completes.
+6. **Cost vs H100** — sliders for GPUs and hours; emits a three-row comparison table (MI300X / H100 / H200) with a headline like "MI300X is 5.4× cheaper than the H100 baseline".
+7. **Try the model** — chat panel that proxies to `/v1/chat/completions`. Stays disabled and explains why until the backend reports ready; a **Check now** button re-probes on demand.
 
 ## Demo storyboard for the 5-min hackathon video
 
@@ -101,6 +190,14 @@ No JavaScript framework, no build step, no node_modules.
 - cost returns three breakdowns; 422 on invalid input
 - health endpoint reports `recipes_available=12`
 - `/health` mentions `coach_url=/coach/`
+- the train card exposes the diagnostic accordions (`metrics-table-wrap`,
+  `metrics-table-count`, `train-log-count`, `chart-window-note`) and coach.js wires
+  the rolling-window cap + counters (`MAX_CHART_POINTS`, `_updateMetricsTableCount`,
+  `_updateLogCount`)
+- the receipt card + loader are present (`step-receipt`, `loadReceiptForRun`)
+
+The live-training + receipt round-trip is covered in `tests/test_coach_receipt_api.py`
+(canned spawn → `/coach/api/receipt/{id}` returns `verified=True`).
 
 Run with `uv run pytest tests/test_coach_api.py -v`.
 

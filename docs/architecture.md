@@ -154,7 +154,7 @@ preserved in `budget/providers/*` for post-hackathon work. Per-module map at
 Verification gate that should always pass on the base install:
 
 ```bash
-uv run pytest -q          # → 112 passed
+uv run pytest -q          # → 564 passed
 uv run ruff check .       # clean
 ```
 

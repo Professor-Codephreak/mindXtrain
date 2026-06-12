@@ -18,7 +18,7 @@ are flagged.
 git clone <repo-url> mindxtrain
 cd mindxtrain
 uv sync                       # one project, ~40 deps, no GPU stack
-uv run pytest -q              # → 112 passed
+uv run pytest -q              # → 564 passed
 ```
 
 The base install gives you the CLI, the Coach UI, the autotune dry-run, the

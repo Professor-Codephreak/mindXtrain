@@ -68,6 +68,18 @@ main {
   scroll-margin-top: 1rem;
 }
 
+/* Inline "Check now"-style re-probe trigger in a card header. */
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent-2);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+.link-button:hover { color: var(--accent); }
+
 /* Auto-advance step states. .active = the step the user is on; .done = a
    completed step (kept visible for context); neither = pending. */
 .card.active {
@@ -258,14 +270,34 @@ textarea { width: 100%; resize: vertical; }
 }
 .core-pip.on { background: var(--accent); }
 
-#session-metrics > summary {
+#session-metrics > summary,
+#metrics-table-wrap > summary,
+#train-log-wrap > summary {
   cursor: pointer;
   user-select: none;
   font-size: 0.85rem;
   color: var(--muted);
   margin-bottom: 0.5rem;
 }
-#session-metrics > summary:hover { color: var(--fg); }
+#session-metrics > summary:hover,
+#metrics-table-wrap > summary:hover,
+#train-log-wrap > summary:hover { color: var(--fg); }
+#metrics-table-wrap { margin-top: 0.75rem; }
+#chart-window-note { margin: 0.25rem 0 0; }
+
+/* Create-script (dataset authoring) form. */
+.dataset-form { display: flex; flex-direction: column; gap: 0.6rem; }
+.dataset-form label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; }
+.dataset-form textarea {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  font-family: inherit;
+}
+.dataset-form .train-controls { flex-direction: row; align-items: center; flex-wrap: wrap; }
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

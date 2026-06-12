@@ -21,8 +21,8 @@ def test_diagnostics_returns_full_profile():
     # CPU panel is always populated.
     assert data["cpu"]["available"] is True
     assert data["cpu"]["cores"] >= 1
-    # Recommendation is always one of the three lanes.
-    assert data["recommended_lane"] in {"trl_cpu", "axolotl_amd", "axolotl_cuda"}
+    # Recommendation is always one of the known lanes.
+    assert data["recommended_lane"] in {"trl_cpu", "trl_local", "axolotl_amd"}
 
 
 def test_diagnostics_cpu_has_expected_fields():

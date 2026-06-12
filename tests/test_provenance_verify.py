@@ -75,6 +75,93 @@ def test_verify_detects_checkpoint_tamper(tmp_path):
     assert res["config_yaml"] is True
 
 
+def test_verify_passes_when_dataset_and_eval_absent(tmp_path):
+    """A CPU run writes only a checkpoint; empty dataset/eval hashes must pass."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("meta: {}")
+    ckpt = tmp_path / "checkpoint"
+    ckpt.mkdir()
+    (ckpt / "adapter.safetensors").write_bytes(b"\x01" * 32)
+
+    m = Manifest(
+        run_id="cpu-run",
+        base_model="x",
+        blake3=ProvenanceHashes(
+            config_yaml=blake3_file(cfg),
+            checkpoint=blake3_dir(ckpt),
+            # dataset / eval_json / autotune_plan left at "" default
+        ),
+    )
+    res = verify_receipt(
+        m,
+        config_yaml_path=cfg,
+        dataset_manifest_path=tmp_path / "missing_dataset.json",
+        checkpoint_dir=ckpt,
+        eval_json_path=tmp_path / "missing_eval.json",
+    )
+    assert all(res.values())
+    assert res["dataset"] is True
+    assert res["eval_json"] is True
+    assert res["autotune_plan"] is True
+
+
+def test_verify_autotune_plan_round_trip_and_tamper(tmp_path):
+    """The bound AutotunePlan hash verifies against its exact persisted bytes."""
+    from mindxtrain.autotune.plan import AutotunePlan
+    from mindxtrain.provenance.hashing import blake3_bytes
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("meta: {}")
+    ckpt = tmp_path / "checkpoint"
+    ckpt.mkdir()
+    (ckpt / "adapter.safetensors").write_bytes(b"\x02" * 32)
+
+    plan = AutotunePlan(attention_backend="ck", gemm_heuristic="hipblaslt_default")
+    plan_bytes = plan.model_dump_json(indent=2).encode()
+
+    m = Manifest(
+        run_id="plan-run",
+        base_model="x",
+        blake3=ProvenanceHashes(
+            config_yaml=blake3_file(cfg),
+            checkpoint=blake3_dir(ckpt),
+            autotune_plan=blake3_bytes(plan_bytes),
+        ),
+    )
+
+    good = verify_receipt(
+        m,
+        config_yaml_path=cfg,
+        dataset_manifest_path=tmp_path / "nope.json",
+        checkpoint_dir=ckpt,
+        eval_json_path=tmp_path / "nope.json",
+        plan_json=plan_bytes,
+    )
+    assert good["autotune_plan"] is True
+
+    # A different plan (or missing bytes) fails the plan check.
+    tampered = plan.model_copy(update={"attention_backend": "triton"})
+    bad = verify_receipt(
+        m,
+        config_yaml_path=cfg,
+        dataset_manifest_path=tmp_path / "nope.json",
+        checkpoint_dir=ckpt,
+        eval_json_path=tmp_path / "nope.json",
+        plan_json=tampered.model_dump_json(indent=2).encode(),
+    )
+    assert bad["autotune_plan"] is False
+
+    missing = verify_receipt(
+        m,
+        config_yaml_path=cfg,
+        dataset_manifest_path=tmp_path / "nope.json",
+        checkpoint_dir=ckpt,
+        eval_json_path=tmp_path / "nope.json",
+        plan_json=None,
+    )
+    assert missing["autotune_plan"] is False
+
+
 def test_manifest_round_trip_through_json():
     m = Manifest(
         run_id="r-2",
