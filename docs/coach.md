@@ -240,14 +240,21 @@ H200_USDC_PER_HOUR = 6.00
 
 The MI300X rate is sourced from `mindxtrain.budget.pricing.MI300X_USDC_PER_HOUR` ($1.99/hr, AMD Developer Cloud list price).
 
-## Wiring the chat panel to a live vLLM endpoint
+## Streaming chat + ollama controls (Try the model)
 
-To enable the chat panel:
+The **Try the model** card chats with a local model and **streams the response
+token-by-token** — the [AI SDK](<Vercel AI SDK 6_ A Framework-Agnostic Deep Dive (June 2026).md>)
+text-stream pattern, implemented in vanilla JS (no build step): `coach.js` consumes a
+`text/event-stream` whose `data:` lines are JSON token deltas, ending with `data: [DONE]`.
 
-```bash
-export MINDXTRAIN_BACKEND=vllm
-export MINDXTRAIN_VLLM_BASE_URL=http://localhost:8000/v1
-podman-compose -f ops/compose/compose_dev.yaml up -d   # boots vLLM-ROCm + the mindxtrain operator
-```
+- **`POST /coach/api/chat/stream`** — `{model, messages, max_tokens?}` → SSE token stream.
+  Relays `backend.stream_chat()` (the OpenAI-compatible streaming the ollama/vLLM backends
+  already speak). Backend errors are surfaced in-stream (`event: error`), never as a mid-stream 500.
+- **Model picker** — populated from `GET /coach/api/models` (local models sorted ahead of
+  `:cloud`), so the chat no longer defaults to a cloud model that silently returns nothing.
+- **ollama controls** — `GET /coach/api/ollama/status` + `POST /coach/api/ollama/{start,stop}`
+  start/stop the local `ollama serve` and report its state; `↻ models` re-lists.
 
-Then `coach.js` `probeChat()` flips the panel from disabled to enabled, and the textarea proxies to `/v1/chat/completions` against the FP8 model produced by `mindxtrain quantize`. The full pipeline lives in [HANDOFF.md](../HANDOFF.md) §§ 5–6.
+For a remote vLLM-ROCm endpoint instead, set `MINDXTRAIN_BACKEND=vllm` +
+`MINDXTRAIN_VLLM_BASE_URL`; the same streaming chat works against it
+(see [HANDOFF.md](../HANDOFF.md) §§ 5–6).

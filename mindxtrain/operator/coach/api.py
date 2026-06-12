@@ -742,7 +742,145 @@ async def api_models() -> dict[str, Any]:
         models = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
     except (httpx.HTTPError, OSError, ValueError):
         models = []
+    # Local models first so the chat/boardroom default isn't a :cloud model.
+    models.sort(key=lambda m: (":cloud" in m, m))
     return {"base_url": base, "models": models}
+
+
+# ---- chat: AI-SDK-style streaming + ollama controls ---------------------
+# The chat streams token deltas as Server-Sent Events (the AI SDK "text stream"
+# pattern) so responses render live, and exposes start/stop/status for the local
+# ollama server + model interaction. See docs/coach.md.
+
+
+def _resolve_chat_backend() -> Any:
+    """Build the active chat backend (ollama / vllm / openai_compat)."""
+    from mindxtrain.models.registry import build_backend
+    from mindxtrain.operator.app import resolve_backend_name
+
+    name = resolve_backend_name()
+    kwargs: dict[str, Any] = {}
+    if name == "vllm":
+        kwargs["base_url"] = os.environ.get(
+            "MINDXTRAIN_VLLM_BASE_URL",
+            os.environ.get("AUTOMINDX_VLLM_BASE_URL", "http://localhost:8000/v1"),
+        )
+    elif name == "ollama":
+        kwargs["base_url"] = os.environ.get("MINDXTRAIN_OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    elif name == "openai_compat":
+        kwargs["base_url"] = os.environ.get("MINDXTRAIN_OPENAI_BASE_URL", "")
+        kwargs["api_key"] = os.environ.get("MINDXTRAIN_OPENAI_API_KEY", "")
+    return build_backend(name, **kwargs)
+
+
+@router.post("/api/chat/stream")
+async def api_chat_stream(body: dict[str, Any]) -> StreamingResponse:
+    """Stream a chat completion as an SSE text stream of token deltas.
+
+    Body: `{model, messages:[{role,content}], max_tokens?, temperature?}`. Each SSE
+    `data:` line is a JSON-encoded token; the stream ends with `data: [DONE]`. Mirrors
+    the AI SDK text-stream protocol so the client renders tokens as they arrive.
+    """
+    from pydantic import ValidationError
+
+    from mindxtrain.models.registry import ChatRequest
+
+    payload = {
+        "model": str(body.get("model") or "").strip() or "default",
+        "messages": body.get("messages") or [],
+        "max_tokens": int(body.get("max_tokens") or 512),
+        "temperature": float(body.get("temperature", 0.7)),
+        "stream": True,
+    }
+    try:
+        req = ChatRequest.model_validate(payload)
+    except (ValidationError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    backend = _resolve_chat_backend()
+
+    async def _gen() -> Any:
+        try:
+            stream = await backend.stream_chat(req)
+            async for token in stream:
+                yield f"data: {json.dumps(token)}\n\n"
+        except Exception as exc:  # surface backend errors in-stream, never 500 mid-stream
+            yield f"event: error\ndata: {json.dumps(str(exc))}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers=_sse_headers())
+
+
+def _ollama_serve_pids() -> list[int]:
+    """PIDs of running `ollama serve` processes (best-effort)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", "ollama serve"], capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(x) for x in out.stdout.split() if x.strip().isdigit()]
+
+
+@router.get("/api/ollama/status")
+async def api_ollama_status() -> dict[str, Any]:
+    """Whether the local ollama server is reachable + installed + running."""
+    import shutil
+
+    import httpx
+
+    from mindxtrain.governance.panel import resolve_chat_base_url
+
+    base = resolve_chat_base_url()
+    reachable = False
+    try:
+        with httpx.Client(timeout=2.0) as client:
+            reachable = client.get(f"{base}/models").status_code == 200
+    except (httpx.HTTPError, OSError):
+        reachable = False
+    return {
+        "reachable": reachable,
+        "has_ollama_bin": shutil.which("ollama") is not None,
+        "serve_pids": _ollama_serve_pids(),
+        "base_url": base,
+    }
+
+
+@router.post("/api/ollama/start")
+async def api_ollama_start() -> dict[str, Any]:
+    """Start `ollama serve` (detached) if it isn't already running."""
+    import shutil
+    import subprocess
+
+    if shutil.which("ollama") is None:
+        raise HTTPException(status_code=422, detail="ollama binary not found on PATH")
+    if _ollama_serve_pids():
+        return {"started": False, "note": "ollama serve already running"}
+    try:
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=f"failed to start ollama: {exc}") from exc
+    return {"started": True}
+
+
+@router.post("/api/ollama/stop")
+async def api_ollama_stop() -> dict[str, Any]:
+    """Stop the local `ollama serve` process(es)."""
+    import subprocess
+
+    pids = _ollama_serve_pids()
+    if not pids:
+        return {"stopped": False, "note": "no `ollama serve` process found"}
+    try:
+        subprocess.run(["pkill", "-f", "ollama serve"], timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"stopped": True, "pids": pids}
 
 
 @router.post("/api/boardroom/convene")

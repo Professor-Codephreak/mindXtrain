@@ -1472,30 +1472,76 @@ function runDropletSync() {
 // --- step 7: chat (gated on backend health) ------------------------------
 
 async function probeChat() {
+  // Backend badge + ollama status + the model list that drives the chat.
   try {
     const h = await getJSON("/coach/api/health");
-    const status = $("#chat-status");
     state.chatBackendModel = h.chat_backend_model || "";
-    if (h.chat_backend_ready) {
-      const qualifier = h.chat_backend_model
-        ? ` (${h.chat_backend_model})`
-        : "";
-      status.textContent = `${h.chat_backend_name}${qualifier} ready`;
-      status.className = "hint ready";
-      $("#chat-disabled-msg").hidden = true;
-      $("#chat-form").hidden = false;
-    } else {
-      const name = h.chat_backend_name || "(no backend configured)";
-      status.textContent = `${name} not ready`;
-      status.className = "hint notready";
-      // Keep the input visible but disabled, with a hint about why.
-      $("#chat-disabled-msg").hidden = false;
-    }
     _updateBackendBadge(h);
   } catch (e) {
-    $("#chat-status").textContent = "health probe failed";
     _updateBackendBadge({ chat_backend_ready: false, chat_backend_name: "" });
   }
+  await refreshOllamaStatus();
+  await loadChatModels();
+}
+
+async function refreshOllamaStatus() {
+  const el = $("#ollama-status");
+  if (!el) return;
+  try {
+    const s = await getJSON("/coach/api/ollama/status");
+    state.ollamaReachable = s.reachable;
+    el.textContent = s.reachable
+      ? `ollama: running (${(s.serve_pids || []).length || 1} proc)`
+      : (s.has_ollama_bin ? "ollama: stopped" : "ollama: not installed");
+    el.className = "hint " + (s.reachable ? "ready" : "notready");
+    const startBtn = $("#ollama-start");
+    const stopBtn = $("#ollama-stop");
+    if (startBtn) startBtn.hidden = s.reachable;
+    if (stopBtn) stopBtn.hidden = !s.reachable;
+  } catch (e) {
+    el.textContent = "ollama: ?";
+  }
+}
+
+async function loadChatModels() {
+  const sel = $("#chat-model");
+  const status = $("#chat-status");
+  if (!sel) return;
+  let models = [];
+  try { models = (await getJSON("/coach/api/models")).models || []; } catch (e) { /* offline */ }
+  sel.innerHTML = "";
+  if (!models.length) {
+    if ($("#chat-disabled-msg")) $("#chat-disabled-msg").hidden = false;
+    if ($("#chat-send")) $("#chat-send").disabled = true;
+    if (status) { status.textContent = "no model"; status.className = "hint notready"; }
+    return;
+  }
+  for (const id of models) {
+    const o = document.createElement("option");
+    o.value = id; o.textContent = id;
+    sel.appendChild(o);
+  }
+  // Prefer the detected backend model; else the first (local-first, sorted server-side).
+  if (state.chatBackendModel && models.includes(state.chatBackendModel)) {
+    sel.value = state.chatBackendModel;
+  }
+  if ($("#chat-disabled-msg")) $("#chat-disabled-msg").hidden = true;
+  if ($("#chat-send")) $("#chat-send").disabled = false;
+  if (status) { status.textContent = `${models.length} model(s) ready`; status.className = "hint ready"; }
+}
+
+async function startOllama() {
+  const el = $("#ollama-status");
+  if (el) el.textContent = "ollama: starting…";
+  try { await postJSON("/coach/api/ollama/start", {}); } catch (e) { /* report via status */ }
+  setTimeout(probeChat, 1500);
+}
+
+async function stopOllama() {
+  const el = $("#ollama-status");
+  if (el) el.textContent = "ollama: stopping…";
+  try { await postJSON("/coach/api/ollama/stop", {}); } catch (e) { /* report via status */ }
+  setTimeout(probeChat, 800);
 }
 
 function _updateBackendBadge(h) {
@@ -1521,33 +1567,84 @@ function _startChatBackendPolling() {
   window.addEventListener("focus", () => { probeChat(); });
 }
 
+let _chatHistory = [];
+let _chatAbort = null;
+
+function _appendChatMsg(role, text) {
+  const t = $("#chat-transcript");
+  t.hidden = false;
+  const div = document.createElement("div");
+  div.className = "chat-msg chat-" + role;
+  div.innerHTML = `<span class="chat-role">${role}</span><span class="chat-text"></span>`;
+  div.querySelector(".chat-text").textContent = text;
+  t.appendChild(div);
+  t.scrollTop = t.scrollHeight;
+  return div.querySelector(".chat-text");
+}
+
 async function sendChat() {
-  const input = $("#chat-input").value.trim();
+  const inputEl = $("#chat-input");
+  const input = inputEl.value.trim();
   if (!input) return;
+  const model = $("#chat-model") ? $("#chat-model").value : "";
+  if (!model) { $("#chat-status").textContent = "pick a model first"; return; }
+
+  inputEl.value = "";
+  _appendChatMsg("user", input);
+  _chatHistory.push({ role: "user", content: input });
+  const out = _appendChatMsg("assistant", "…");
   $("#chat-send").disabled = true;
+  $("#chat-stop").hidden = false;
+  _chatAbort = new AbortController();
+  let acc = "";
   try {
-    const r = await fetch("/v1/chat/completions", {
+    const resp = await fetch("/coach/api/chat/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        // Pass the detected backend's preferred model when known
-        // (e.g., "qwen3:0.6b" for ollama). Falls back to a generic
-        // placeholder for backends like vllm where the model loaded
-        // server-side decides regardless of what the client sends.
-        model: state.chatBackendModel || "mindxtrain-demo",
-        messages: [
-          { role: "system", content: "You are mindXtrain's demo agent." },
-          { role: "user", content: input },
-        ],
-        max_tokens: 256,
-      }),
+      body: JSON.stringify({ model, messages: _chatHistory, max_tokens: 768 }),
+      signal: _chatAbort.signal,
     });
-    const text = await r.text();
-    $("#chat-response").textContent = text;
-    $("#chat-response").hidden = false;
+    // Consume the SSE text stream (AI-SDK textStream pattern) token-by-token.
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let stop = false;
+    while (!stop) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, nl);
+        buf = buf.slice(nl + 2);
+        let isErr = false;
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: error")) isErr = true;
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (data === "[DONE]") { stop = true; break; }
+          try {
+            const piece = JSON.parse(data);
+            if (isErr) { out.textContent = "⚠ " + piece; }
+            else { acc += piece; out.textContent = acc; }
+          } catch (e) { /* skip unparseable frame */ }
+        }
+        $("#chat-transcript").scrollTop = $("#chat-transcript").scrollHeight;
+      }
+    }
+    if (acc) _chatHistory.push({ role: "assistant", content: acc });
+    else if (out.textContent === "…") out.textContent = "(no content — try a larger model)";
+  } catch (e) {
+    if (e.name !== "AbortError") out.textContent = `⚠ ${e}`;
   } finally {
     $("#chat-send").disabled = false;
+    $("#chat-stop").hidden = true;
+    _chatAbort = null;
   }
+}
+
+function stopChat() {
+  if (_chatAbort) _chatAbort.abort();
 }
 
 // --- step 7: MEI card -----------------------------------------------------
@@ -2081,6 +2178,19 @@ window.addEventListener("DOMContentLoaded", () => {
       probeChat();
     });
   }
+  // Streaming chat + ollama controls.
+  const chatStop = $("#chat-stop");
+  if (chatStop) chatStop.addEventListener("click", stopChat);
+  const chatInput = $("#chat-input");
+  if (chatInput) chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(); }
+  });
+  const ollamaStart = $("#ollama-start");
+  if (ollamaStart) ollamaStart.addEventListener("click", startOllama);
+  const ollamaStop = $("#ollama-stop");
+  if (ollamaStop) ollamaStop.addEventListener("click", stopOllama);
+  const ollamaModels = $("#ollama-refresh-models");
+  if (ollamaModels) ollamaModels.addEventListener("click", loadChatModels);
   $("#mei-refresh").addEventListener("click", () => {
     loadMEIForRun(state.run && state.run.id);
   });

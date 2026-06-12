@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Streaming chat + ollama controls** (Coach "Try the model" card). Responses now
+  **stream token-by-token** (the AI-SDK text-stream pattern over SSE) via
+  `POST /coach/api/chat/stream`, with a **model picker** (local models first, no more
+  silently-broken `:cloud` default) and **start/stop/status** for the local ollama
+  server (`/coach/api/ollama/{status,start,stop}`). Fixes the chat that returned no
+  visible response. Reference: `docs/Vercel AI SDK 6_ … .md`.
+
 - **Ollama Modelfile builder** (`mindxtrain.deploy.modelfile`) — render a valid
   `Modelfile` from a typed `ModelfileSpec` (every instruction: FROM/SYSTEM/TEMPLATE/
   ADAPTER/LICENSE/MESSAGE/REQUIRES + the full PARAMETER catalogue). A standalone Coach

@@ -532,16 +532,27 @@
         <span class="hint" id="chat-status">probing&hellip;</span>
         <button id="chat-recheck" class="link-button" type="button">Check now</button>
       </header>
-      <p class="prose" id="chat-disabled-msg">
-        Chat is disabled until the inference backend reports ready.
-        A backend comes online after <code>serve --to ollama</code> or a
-        vLLM/SGLang launch; click <em>Check now</em> to re-probe without waiting
-        for the 30 s poll.
+      <p class="prose">
+        Chat with a local model &mdash; responses stream token-by-token (the AI-SDK
+        text-stream pattern). Pick a model, or start the ollama server if it isn&rsquo;t
+        running.
       </p>
-      <div id="chat-form" hidden>
-        <textarea id="chat-input" rows="3" placeholder="Ask anything&hellip;"></textarea>
+      <div class="train-controls" id="ollama-controls">
+        <span id="ollama-status" class="hint">ollama: &hellip;</span>
+        <button id="ollama-start" class="link-button" type="button">Start ollama</button>
+        <button id="ollama-stop" class="link-button" type="button">Stop</button>
+        <button id="ollama-refresh-models" class="link-button" type="button">↻ models</button>
+        <label>model <select id="chat-model" title="local models the backend exposes"></select></label>
+      </div>
+      <p class="prose" id="chat-disabled-msg" hidden>
+        No model available &mdash; start ollama (above) or run <code>serve --to ollama</code>,
+        then <em>↻ models</em>.
+      </p>
+      <div id="chat-transcript" class="chat-transcript" hidden></div>
+      <div class="train-controls">
+        <textarea id="chat-input" rows="2" placeholder="Ask anything&hellip; (Ctrl+Enter to send)"></textarea>
         <button id="chat-send">Send</button>
-        <pre id="chat-response" class="code" hidden></pre>
+        <button id="chat-stop" hidden>Stop</button>
       </div>
     </section>
   </main>
