@@ -158,6 +158,39 @@ def test_cost_validates_input():
     assert r.status_code == 422
 
 
+def test_cost_calculator_generalizes_and_includes_a100():
+    # Default 8B full FT: needs ~137 GB → MI300X/H200 fit, H100/A100 don't.
+    r = client.post("/coach/api/cost", json={"gpus": 1, "hours": 1.0})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert "a100" in d
+    assert d["needed_vram_gb"] > 100
+    assert d["mi300x"]["fits_qwen3_8b_bf16_bs8_seq4096"] is True
+    assert d["a100"]["fits_qwen3_8b_bf16_bs8_seq4096"] is False
+    assert len(d["comparisons"]) == 4
+    assert d["cheapest_that_fits"]
+
+    # A tiny LoRA workload fits everywhere.
+    r2 = client.post("/coach/api/cost", json={
+        "gpus": 1, "hours": 1.0, "params_b": 0.135, "method": "lora", "seq_len": 256, "batch": 1,
+    })
+    d2 = r2.json()
+    assert d2["a100"]["fits_qwen3_8b_bf16_bs8_seq4096"] is True
+    assert d2["needed_vram_gb"] < d["needed_vram_gb"]
+
+
+def test_cost_card_hidden_recipe_default_present():
+    html = client.get("/coach/").text
+    # Cost card is kept in the background but not displayed.
+    assert 'id="step-cost" class="card" data-step-id="step-cost" hidden' in html
+    # Recipe picker shows a default + an accordion of the rest.
+    assert 'id="recipe-default"' in html
+    assert 'id="recipe-more"' in html
+    js = client.get("/coach/static/coach.js").text
+    assert "renderDefaultRecipe" in js
+    assert "DEFAULT_RECIPE" in js
+
+
 def test_health_endpoint_reports_recipes_count(monkeypatch):
     # Force the auto-detect probe off so the legacy "no live backend" shape
     # holds regardless of whether ollama happens to be running on the host

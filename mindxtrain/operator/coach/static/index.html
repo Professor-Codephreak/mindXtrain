@@ -186,9 +186,13 @@
     <section id="step-recipes" class="card" data-step-id="step-recipes">
       <header>
         <h2><span class="step">4</span> Pick a recipe</h2>
-        <span class="hint" id="recipe-count"></span>
+        <span class="hint" id="recipe-hint">default for your hardware</span>
       </header>
-      <div id="recipe-list" class="grid"></div>
+      <div id="recipe-default"></div>
+      <details id="recipe-more">
+        <summary>other recipes <span class="hint" id="recipe-count"></span></summary>
+        <div id="recipe-list" class="grid"></div>
+      </details>
       <details id="recipe-detail" hidden>
         <summary>Selected recipe YAML</summary>
         <pre id="recipe-yaml" class="code"></pre>
@@ -448,9 +452,11 @@
       </details>
     </section>
 
-    <section id="step-cost" class="card" data-step-id="step-cost">
+    <!-- Cost calculator is kept in the background (endpoint /coach/api/cost) but
+         not displayed in the UI at this time. -->
+    <section id="step-cost" class="card" data-step-id="step-cost" hidden>
       <header>
-        <h2><span class="step">9</span> Cost vs H100</h2>
+        <h2><span class="step">9</span> Cost vs datacenter GPUs</h2>
       </header>
       <div class="cost-controls">
         <label>GPUs <input id="cost-gpus" type="number" min="1" max="8" step="1" value="1" /></label>

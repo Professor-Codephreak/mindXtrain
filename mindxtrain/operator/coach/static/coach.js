@@ -102,7 +102,6 @@ const STEP_ORDER = [
   "step-compile",
   "step-deploy",
   "step-train",
-  "step-cost",
   "step-chat",
 ];
 
@@ -120,7 +119,6 @@ const STAGE_FOR_STEP = {
   "step-receipt":      "cust",
   "step-boardroom":    "cust",
   "step-mei":          "cust",
-  "step-cost":         "cust",
   "step-chat":         "cust",
 };
 
@@ -501,11 +499,13 @@ async function runHardware() {
 }
 
 function _autoSelectRecipeWhenReady(name, attempt) {
-  const card = document.querySelector(`.recipe[data-name="${name}"]`);
+  // Promote the hardware-recommended recipe to the prominent default slot.
+  _recommendedRecipe = name;
+  renderDefaultRecipe();
+  const card = document.querySelector(`#recipe-list .recipe[data-name="${name}"]`);
   if (card) {
     card.classList.add("recommended");
-    // Don't actually click — just mark visually. The user picks
-    // deliberately so they're not surprised by an auto-launch.
+    // Don't auto-click — the user picks deliberately (no surprise launch).
     return;
   }
   if (attempt < 20) {
@@ -562,26 +562,46 @@ async function runDreamCorpus() {
 
 // --- step 3: recipes -----------------------------------------------------
 
-async function loadRecipes() {
-  const list = await getJSON("/coach/api/recipes");
-  $("#recipe-count").textContent = `${list.length} built-in`;
-  const target = $("#recipe-list");
-  target.innerHTML = "";
-  for (const r of list) {
-    const div = document.createElement("div");
-    div.className = "recipe";
-    div.dataset.name = r.name;
-    div.innerHTML = `
+// The default shown front-and-center until hardware recommends one. Device-aware
+// `trl_local` runs on a laptop or a GPU unchanged, so it's the safe default.
+const DEFAULT_RECIPE = "mindx_fallback_qwen3_1_5b_local";
+let _recipeCache = [];
+let _recommendedRecipe = null;
+
+function _recipeCardEl(r, isDefault) {
+  const div = document.createElement("div");
+  div.className = "recipe" + (isDefault ? " recommended" : "");
+  div.dataset.name = r.name;
+  div.innerHTML = `
       <h3>${r.name}</h3>
       <div class="meta">
         <span class="badge">${r.method}</span>
         <span class="badge">${r.gpus}× GPU</span>
         ${r.base_model}
-      </div>
-    `;
-    div.addEventListener("click", () => selectRecipe(r.name));
-    target.appendChild(div);
-  }
+      </div>`;
+  div.addEventListener("click", () => selectRecipe(r.name));
+  return div;
+}
+
+function renderDefaultRecipe() {
+  const host = $("#recipe-default");
+  if (!host || !_recipeCache.length) return;
+  const name = _recommendedRecipe || DEFAULT_RECIPE;
+  const r = _recipeCache.find((x) => x.name === name) || _recipeCache[0];
+  host.innerHTML = "";
+  host.appendChild(_recipeCardEl(r, true));
+}
+
+async function loadRecipes() {
+  const list = await getJSON("/coach/api/recipes");
+  _recipeCache = list;
+  $("#recipe-count").textContent = `(${list.length} total)`;
+  // Full list lives in the collapsed "other recipes" accordion…
+  const target = $("#recipe-list");
+  target.innerHTML = "";
+  for (const r of list) target.appendChild(_recipeCardEl(r, false));
+  // …and the default/recommended one is shown prominently.
+  renderDefaultRecipe();
 }
 
 async function selectRecipe(name) {
@@ -2050,7 +2070,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (pushBtn) pushBtn.addEventListener("click", pushTrainedRunToOllama);
   const mfBtn = $("#open-modelfile-btn");
   if (mfBtn) mfBtn.addEventListener("click", openModelfileBuilder);
-  $("#run-cost").addEventListener("click", runCost);
+  // Cost card is hidden for now; keep the handler wired if present.
+  const costBtn = $("#run-cost");
+  if (costBtn) costBtn.addEventListener("click", runCost);
   $("#chat-send").addEventListener("click", sendChat);
   const chatRecheck = $("#chat-recheck");
   if (chatRecheck) {

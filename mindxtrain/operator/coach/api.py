@@ -25,7 +25,7 @@ import subprocess
 import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from mindxtrain.autotune.benchmark import run_autotune
 from mindxtrain.autotune.plan import AutotunePlan
-from mindxtrain.budget.pricing import MI300X_USDC_PER_HOUR, gpu_hour_price
+from mindxtrain.budget.pricing import MI300X_USDC_PER_HOUR
 from mindxtrain.config.loader import list_recipes, render_recipe
 from mindxtrain.config.schema import XTrainConfig
 from mindxtrain.deploy import (
@@ -71,10 +71,26 @@ _log = logging.getLogger("mindxtrain.operator.coach")
 # smoke recipe by default; override with MINDXTRAIN_AUTOSTART_RECIPE.
 _DEFAULT_AUTOSTART_RECIPE = "mindx_fallback_qwen3_1_5b_cpu_smoke"
 
-# Reference H100 cost numbers used in the cost slide. Lifted from
-# docs/benchmarks.md so the UI shows the same comparison the README does.
+# Reference datacenter-GPU $/hr + VRAM for the (background) cost calculator.
 H100_USDC_PER_HOUR = 4.00
 H200_USDC_PER_HOUR = 6.00
+A100_USDC_PER_HOUR = 1.50
+
+# GPU VRAM (GB) — used to compute whether a workload fits per card.
+_GPU_VRAM_GB = {"mi300x": 192, "h200": 141, "h100": 80, "a100": 80}
+
+# Approximate per-parameter training memory (bytes) by method:
+# full = weights(2) + grads(2) + AdamW fp32 m/v + master (~12) ≈ 16; LoRA/QLoRA
+# freeze the base so only a small adapter carries grads/opt state.
+_BYTES_PER_PARAM = {"full": 16.0, "lora": 3.0, "qlora": 1.5}
+
+
+def _workload_vram_gb(params_b: float, method: str, batch: int, seq_len: int) -> float:
+    """Rough peak training VRAM (GB) for a workload — weights/opt + activations."""
+    base = params_b * _BYTES_PER_PARAM.get(method, 16.0)
+    # Activation memory grows with batch×seq and (weakly) model width.
+    activations = batch * seq_len * 1.0e-4 * (params_b ** 0.5)
+    return base + activations
 
 
 class RecipeSummary(BaseModel):
@@ -105,9 +121,16 @@ class CompileResponse(BaseModel):
 
 
 class CostRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     gpus: int = Field(default=1, ge=1, le=64)
     hours: float = Field(default=1.5, gt=0.0, le=720.0)
     safety_margin: float = Field(default=1.15, ge=1.0, le=2.0)
+    # Generalize beyond the hardcoded Qwen3-8B: the calculator now sizes VRAM
+    # from the actual workload (params, method, batch, seq).
+    params_b: float = Field(default=8.0, gt=0.0, le=2000.0, description="model size, billions of params")
+    method: Literal["full", "lora", "qlora"] = "full"
+    batch: int = Field(default=8, ge=1, le=4096)
+    seq_len: int = Field(default=4096, ge=64, le=1_048_576)
 
 
 class CostBreakdown(BaseModel):
@@ -122,9 +145,13 @@ class CostBreakdown(BaseModel):
 class CostResponse(BaseModel):
     hours: float
     safety_margin: float
+    needed_vram_gb: float
     mi300x: CostBreakdown
     h100: CostBreakdown
     h200: CostBreakdown
+    a100: CostBreakdown
+    comparisons: list[CostBreakdown] = Field(default_factory=list)
+    cheapest_that_fits: str = ""
     speedup_vs_h100_x: float
 
 
@@ -251,40 +278,51 @@ async def api_compile(req: CompileRequest) -> CompileResponse:
 
 @router.post("/api/cost", response_model=CostResponse)
 async def api_cost(req: CostRequest) -> CostResponse:
-    mi300x_cost = gpu_hour_price(gpus=req.gpus, hours=req.hours, safety_margin=req.safety_margin)
-    # H100 OOMs at Qwen3-8B BF16 bs=8 seq=4096, must use 2 GPUs to fit.
-    h100_gpus = max(2, req.gpus * 2)
-    h100_cost = h100_gpus * req.hours * H100_USDC_PER_HOUR * req.safety_margin
-    h200_cost = req.gpus * req.hours * H200_USDC_PER_HOUR * req.safety_margin
+    """Cost + fit comparison vs datacenter GPUs (background; not shown in the UI).
+
+    Sizes peak training VRAM from the workload (params/method/batch/seq), then for
+    each GPU computes the card count needed to fit, the cost, and whether a single
+    card fits. Generalized beyond the old hardcoded Qwen3-8B slide.
+    """
+    needed = _workload_vram_gb(req.params_b, req.method, req.batch, req.seq_len)
+    rates = {
+        "mi300x": MI300X_USDC_PER_HOUR, "h200": H200_USDC_PER_HOUR,
+        "h100": H100_USDC_PER_HOUR, "a100": A100_USDC_PER_HOUR,
+    }
+    labels = {
+        "mi300x": "MI300X (192 GB HBM3)", "h200": "H200 (141 GB HBM3e)",
+        "h100": "H100 (80 GB HBM3)", "a100": "A100 (80 GB)",
+    }
+
+    def _breakdown(key: str) -> CostBreakdown:
+        vram = _GPU_VRAM_GB[key]
+        fits_one = vram >= needed
+        # Cards needed to hold the workload (sharded), honoring the user's gpu count.
+        cards = max(req.gpus, -(-int(needed) // vram))  # ceil-div
+        cost = cards * req.hours * rates[key] * req.safety_margin
+        note = (
+            f"fits on one card ({vram} GB ≥ {needed:.0f} GB needed)."
+            if fits_one
+            else f"needs {cards}x to fit {needed:.0f} GB (or quantize)."
+        )
+        return CostBreakdown(
+            name=labels[key], rate_usdc_per_hour=rates[key], gpus=cards,
+            cost_usdc=round(cost, 2), fits_qwen3_8b_bf16_bs8_seq4096=fits_one, note=note,
+        )
+
+    mi300x, h200, h100, a100 = (_breakdown(k) for k in ("mi300x", "h200", "h100", "a100"))
+    comparisons = [mi300x, h200, h100, a100]
+    fitting = [c for c in comparisons if c.fits_qwen3_8b_bf16_bs8_seq4096] or comparisons
+    cheapest = min(fitting, key=lambda c: c.cost_usdc)
 
     return CostResponse(
         hours=req.hours,
         safety_margin=req.safety_margin,
-        mi300x=CostBreakdown(
-            name="MI300X (192 GB HBM3)",
-            rate_usdc_per_hour=MI300X_USDC_PER_HOUR,
-            gpus=req.gpus,
-            cost_usdc=round(mi300x_cost, 2),
-            fits_qwen3_8b_bf16_bs8_seq4096=True,
-            note="Fits unquantized with massive headroom.",
-        ),
-        h100=CostBreakdown(
-            name="H100 (80 GB HBM3)",
-            rate_usdc_per_hour=H100_USDC_PER_HOUR,
-            gpus=h100_gpus,
-            cost_usdc=round(h100_cost, 2),
-            fits_qwen3_8b_bf16_bs8_seq4096=False,
-            note=f"OOMs at this bs/seq; needs {h100_gpus}x cards or FP8 fallback.",
-        ),
-        h200=CostBreakdown(
-            name="H200 (141 GB HBM3e)",
-            rate_usdc_per_hour=H200_USDC_PER_HOUR,
-            gpus=req.gpus,
-            cost_usdc=round(h200_cost, 2),
-            fits_qwen3_8b_bf16_bs8_seq4096=True,
-            note="Fits with less headroom than MI300X.",
-        ),
-        speedup_vs_h100_x=round(h100_cost / mi300x_cost, 2) if mi300x_cost > 0 else 0.0,
+        needed_vram_gb=round(needed, 1),
+        mi300x=mi300x, h100=h100, h200=h200, a100=a100,
+        comparisons=comparisons,
+        cheapest_that_fits=cheapest.name,
+        speedup_vs_h100_x=round(h100.cost_usdc / mi300x.cost_usdc, 2) if mi300x.cost_usdc > 0 else 0.0,
     )
 
 
