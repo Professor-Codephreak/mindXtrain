@@ -123,6 +123,7 @@ def probe_recall(
     inquiries: list[str],
     *,
     adapter_dir: str | Path | None = None,
+    system: str | None = None,
     max_new_tokens: int = 48,
     force_cpu: bool = False,
 ) -> list[str]:
@@ -131,6 +132,11 @@ def probe_recall(
     With `adapter_dir` the persona-imprinted adapter is merged in (the "after"
     state); without it you get the base model (the "before" state). Same prompts,
     same decoding → a fair before/after recall comparison.
+
+    `system` prepends a system turn to every probe. Pass the persona's system
+    prompt so the probe matches the conditioning the adapter was *trained* under
+    (the script rows carry that system turn); omitting it asks the adapter to
+    recall out of the distribution it learned, which understates the imprint.
     """
     try:
         import torch
@@ -164,8 +170,11 @@ def probe_recall(
     model.eval()
     out: list[str] = []
     for inquiry in inquiries:
+        msgs = [{"role": "user", "content": inquiry}]
+        if system and system.strip():
+            msgs.insert(0, {"role": "system", "content": system.strip()})
         prompt = tok.apply_chat_template(
-            [{"role": "user", "content": inquiry}],
+            msgs,
             tokenize=False,
             add_generation_prompt=True,
         )

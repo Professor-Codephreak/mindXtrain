@@ -19,6 +19,7 @@ Start at [Quickstart](quickstart.md); operators running the demo read [HANDOFF.m
 ## Coach UI & training workflow
 
 - [Coach UI](coach.md) — the interactive `/coach/` operator UI: create-script (personas + skills), live-training diagnostics, verifiable receipt, streaming chat + ollama controls, Modelfile builder.
+- [dcoach](dcoach.md) — `/coach/dcoach`: prove a CPU-trained model recalls its training (imprint → classroom → boardroom → autotune feedback), clean-room llama-style eval tools, prompt-tools page, and how mindXtrain fits decentralized training.
 - [Governance](governance.md) — classroom (graduation) / boardroom (any-N consensus) / dojo (prime-N dispute settlement), model-backed deliberation.
 
 ## Decentralized training landscape (2026)

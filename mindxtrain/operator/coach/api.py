@@ -59,6 +59,87 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 _STATIC_DIR = Path(__file__).parent / "static"
 _REGISTRY = _runs.default_registry()
 
+# Read-only map of the 2026 decentralized-training networks for the dcoach panel.
+# Sourced from docs/decentralized-training-deep-dive-2026.md — referenced, not
+# vendored; mindXtrain does not mine on any of these (all CUDA-first / gated).
+_DECENTRALIZED_NETWORKS: list[dict[str, str]] = [
+    {
+        "name": "Prime Intellect",
+        "what": "Open superintelligence stack: OpenDiLoCo + Environments Hub. "
+                "Flagship INTELLECT-3 (106B MoE) trained centralized — honest signal "
+                "that frontier RL post-training still favours co-located clusters.",
+        "hardware": "Compute Exchange aggregates heterogeneous supply (incl. some AMD).",
+        "token": "No token (Base Sepolia contracts, RewardsDistributor pattern).",
+        "fit": "RL post-training is the decentralization sweet spot — an x402-payable, "
+               "receipt-verified RL job is a natural contribution surface.",
+    },
+    {
+        "name": "Templar · Bittensor SN3",
+        "what": "Covenant-72B (Mar 2026): 72B / ~1.1T tokens, 70+ permissionless miners "
+                "over home internet via SparseLoCo. The only live, incentivized, "
+                "permissionless training market.",
+        "hardware": "Prosumer multi-GPU (NVIDIA/CUDA-first).",
+        "token": "Live — dTAO alpha (τemplar) + TAO; Gauntlet loss-scoring + slashing.",
+        "fit": "Gauntlet is statistical/economic verification (does your update cut "
+               "loss?). A reproducible AOT artifact makes a contribution auditable.",
+    },
+    {
+        "name": "Nous · Psyche",
+        "what": "DisTrO momentum-decoupling coordinated on Solana; Consilience-40B is "
+                "the largest internet pre-training run by params x tokens.",
+        "hardware": "3090-class inference target; larger training nodes (CUDA-first).",
+        "token": "No official token (beware impostor 'NOUS' Solana pairs).",
+        "fit": "On-chain checkpointing for churn tolerance pairs with a BLAKE3 "
+               "checkpoint receipt for end-to-end provenance.",
+    },
+    {
+        "name": "Gensyn",
+        "what": "Verification-first ML compute protocol: execution / verification / "
+                "communication / coordination on an Ethereum rollup. RL Swarm + Verde.",
+        "hardware": "Low floor — CPU+32GB RAM or NVIDIA 3090/4090/5090/A100/H100.",
+        "token": "Testnet points → expected token at mainnet.",
+        "fit": "Verde/RepOps needs bitwise-deterministic execution — exactly what "
+               "mindXtrain's AOT-only policy guarantees. The closest verification match.",
+    },
+    {
+        "name": "Pluralis · Node0",
+        "what": "First public model-parallel internet pretraining: Node0-7.5B, 1,642 GPUs "
+                "/ 300+ participants / 198 cities via Protocol Models (99% activation "
+                "compression). Weights sharded so no node holds the full model.",
+        "hardware": "Single 16GB consumer GPU (3090-class); CUDA ≤12.x required.",
+        "token": "No token (dashboard/reputational credit).",
+        "fit": "Unextractable-model ownership ↔ on-protocol asset registration "
+               "(AgenticPlace / ERC-8004) — provenance receipts make attribution real.",
+    },
+]
+
+_DECENTRALIZED_FIT: list[dict[str, str]] = [
+    {
+        "primitive": "AOT-only autotune plan",
+        "mindxtrain": "The 60s probe freezes attention backend / GEMM / RCCL before "
+                      "step 0 — no JIT autotune in the loop, so a run is reproducible.",
+        "maps_to": "Gensyn Verde + RepOps bitwise-reproducible training verification.",
+    },
+    {
+        "primitive": "BLAKE3 verifiable receipt",
+        "mindxtrain": "manifest.json binds config + dataset + checkpoint + eval hashes; "
+                      "`mindxtrain receipt` re-hashes and verifies the round-trip.",
+        "maps_to": "TOPLOC / checkpoint-hash verification; Templar Gauntlet auditing.",
+    },
+    {
+        "primitive": "x402-metered training surface",
+        "mindxtrain": "A per-job x402 paywall in front of a verifiable training endpoint "
+                      "(Algorand x402-avm) — pay-per-train with a receipt on completion.",
+        "maps_to": "Unbuilt territory — no network natively meters per-job crypto pay.",
+    },
+    {
+        "primitive": "AgenticPlace / ERC-8004 registration",
+        "mindxtrain": "Publish the receipt → register the trained actor on AgenticPlace, "
+                      "attest provenance, wire mindX fallback to the new checkpoint.",
+        "maps_to": "Pluralis unextractable-model ownership / on-chain asset attribution.",
+    },
+]
+
 # Strong refs to per-run watchdog tasks (otherwise the garbage collector
 # can reap them mid-await and the sampler keeps running after a terminal
 # status). Cleaned up by the watchdog itself once it returns.
@@ -193,6 +274,18 @@ async def coach_index() -> FileResponse:
 async def coach_modelfile_page() -> FileResponse:
     """Standalone Ollama Modelfile builder (opened in a separate window)."""
     return FileResponse(_STATIC_DIR / "modelfile.html")
+
+
+@router.get("/dcoach", response_class=FileResponse, include_in_schema=False)
+async def coach_dcoach_page() -> FileResponse:
+    """dcoach — decentralized-aware proof loop (imprint a persona → prove recall)."""
+    return FileResponse(_STATIC_DIR / "dcoach.html")
+
+
+@router.get("/prompts", response_class=FileResponse, include_in_schema=False)
+async def coach_prompts_page() -> FileResponse:
+    """Ollama prompt-tools — cheap non-permanent tests, promote to a Modelfile."""
+    return FileResponse(_STATIC_DIR / "prompts.html")
 
 
 @router.get("/api/modelfile/params")
@@ -736,6 +829,149 @@ async def api_autotune_feedback(req: FeedbackRequest) -> dict[str, Any]:
         req.params, passed=req.passed, classroom_score=req.classroom_score,
     )
     return {"recorded": True, "suggested_next_params": suggestion}
+
+
+# ---- prompt-tools: cheap non-permanent eval (similarity + optional judge) ----
+
+
+class PromptEvalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = ""
+    response: str
+    reference: str
+    use_judge: bool = False
+    model: str = ""
+    base_url: str | None = None
+    guidelines: str = ""
+
+
+@router.post("/api/eval/prompt")
+async def api_eval_prompt(req: PromptEvalRequest) -> dict[str, Any]:
+    """Score a model response against a reference — the cheap, non-permanent test
+    behind the prompt-tools page. Always runs the (free) semantic-similarity
+    evaluator; `use_judge` adds the LLM correctness judge, and a non-empty
+    `guidelines` adds the rubric judge. Judges run off the event loop.
+    """
+    from mindxtrain.eval.llama_evals import (
+        CorrectnessEvaluator,
+        GuidelineEvaluator,
+        SemanticSimilarityEvaluator,
+    )
+
+    scores: dict[str, Any] = {}
+    sim = SemanticSimilarityEvaluator().evaluate(req.response, req.reference)
+    scores["semantic_similarity"] = sim.model_dump()
+
+    if req.use_judge:
+        judge = CorrectnessEvaluator(model=(req.model or "default"), base_url=req.base_url)
+        corr = await asyncio.to_thread(judge.evaluate, req.query, req.response, req.reference)
+        scores["correctness"] = corr.model_dump()
+
+    if req.guidelines.strip():
+        gj = GuidelineEvaluator(model=(req.model or "default"), base_url=req.base_url)
+        gres = await asyncio.to_thread(gj.evaluate, req.response, req.guidelines)
+        scores["guideline"] = gres.model_dump()
+
+    vals = [s["score"] for s in scores.values()]
+    overall = sum(vals) / len(vals) if vals else 0.0
+    return {"scores": scores, "overall": round(overall, 4),
+            "advantageous": overall >= 0.6}
+
+
+# ---- dcoach: the full proof loop, streamed (imprint → classroom → boardroom) --
+
+
+class DcoachRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    persona: str = "codephreak"
+    skills: list[str] = Field(default_factory=list)
+    base_model: str = "HuggingFaceTB/SmolLM2-135M"
+    board_preset: str = "classic_triad"
+    board_model: str | None = None
+    max_new_tokens: int = Field(default=48, ge=8, le=256)
+    run_id: str | None = None
+
+
+@router.post("/api/dcoach/run")
+async def api_dcoach_run(req: DcoachRunRequest) -> StreamingResponse:
+    """Run the dcoach proof loop and stream every phase as SSE.
+
+    Heavy (real CPU imprint-training + before/after generation), so it runs in a
+    worker thread; `on_event(phase, msg)` is bridged onto the event loop through a
+    queue. Each `data:` line is a JSON `{phase, msg}`; the terminal `{phase:"result"}`
+    carries the full `ProofResult`, then `data: [DONE]`.
+    """
+    import tempfile
+    import threading
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    run_id = req.run_id or f"dcoach-{int(time.time())}"
+
+    def _push(item: dict[str, Any] | None) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, item)
+
+    def _emit(phase: str, msg: str) -> None:
+        _push({"phase": phase, "msg": msg})
+
+    def _work() -> None:
+        try:
+            from mindxtrain.governance.proof_loop import run_proof_loop
+
+            out = tempfile.mkdtemp(prefix="dcoach-")
+            result = run_proof_loop(
+                run_id=run_id,
+                persona=req.persona,
+                skills=req.skills,
+                base_model=req.base_model,
+                out_dir=out,
+                board_preset=req.board_preset,
+                board_model=req.board_model,
+                force_cpu=True,
+                max_new_tokens=req.max_new_tokens,
+                on_event=_emit,
+            )
+            _push({"phase": "result", "result": result.model_dump()})
+        except Exception as exc:  # surface in-stream, never 500 mid-stream
+            _push({"phase": "error", "msg": str(exc)})
+        finally:
+            _push(None)
+
+    threading.Thread(target=_work, name=f"dcoach-{run_id}", daemon=True).start()
+
+    async def _gen() -> AsyncIterator[str]:
+        yield f"data: {json.dumps({'phase': 'start', 'run_id': run_id})}\n\n"
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers=_sse_headers())
+
+
+@router.get("/api/decentralized")
+async def api_decentralized() -> dict[str, Any]:
+    """Read-only map of the 2026 decentralized-training networks + how mindXtrain
+    fits each (AOT-only ⇒ verifiable receipt; x402-metered job; AgenticPlace).
+
+    Sourced from `docs/decentralized-training-deep-dive-2026.md`. mindXtrain does
+    not mine on these networks (all are CUDA-locked / hardware-gated) — it exposes
+    a *verifiable, payable* training surface compatible with their verification
+    primitives.
+    """
+    return {
+        "thesis": (
+            "mindXtrain's AOT-only discipline (the autotune plan is frozen before "
+            "the first step) makes a run bit-for-bit reproducible — the same "
+            "property Verde/RepOps verification needs. Bind that to a BLAKE3 "
+            "receipt and the run becomes an x402-payable, ERC-8004-attestable job "
+            "registerable on AgenticPlace."
+        ),
+        "networks": _DECENTRALIZED_NETWORKS,
+        "fit": _DECENTRALIZED_FIT,
+    }
 
 
 # ---- governance: boardroom (any-N) + dojo (prime-N) ---------------------

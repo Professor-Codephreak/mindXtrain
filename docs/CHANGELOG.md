@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **dcoach page + prompt-tools + decentralized panel.** New `/coach/dcoach` workflow
+  page: one-click **Imprint & Prove** (persona/skills + advanced toggles) streams the
+  proof loop live (`POST /coach/api/dcoach/run`, SSE) and shows the classroom before/after
+  recall, boardroom verdict, and autotune-feedback next-params. A read-only
+  **decentralized-network panel** (`GET /coach/api/decentralized`) maps Prime Intellect /
+  Templar SN3 / Nous Psyche / Gensyn / Pluralis to how mindXtrain fits (AOT-only ⇒ Verde-
+  compatible; BLAKE3 receipt; x402; AgenticPlace). New `/coach/prompts` **prompt-tools**
+  page: craft a system prompt + few-shot demos → test against a base model (no training) →
+  evaluate (`POST /coach/api/eval/prompt`) → **make permanent** via Modelfile. Docs:
+  [dcoach.md](dcoach.md).
 - **dcoach proof loop + clean-room eval tools.** Prove a CPU-trained model recalls
   its training: `governance.proof_loop.run_proof_loop` chains compose-script → imprint-
   train → probe before/after → **classroom** (`governance.classroom.evaluate_classroom`)
@@ -47,6 +57,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`deliberate`, `model_ballot`, `model_judge_ballot`). Coach **Boardroom** card +
   `GET /coach/api/boardroom/presets`, `POST /coach/api/boardroom/convene`,
   `POST /coach/api/dojo/settle` (model deliberation runs off the event loop).
+
+### Fixed
+
+- **Imprint recall now measured under the trained conditioning.** `probe_recall` accepts an
+  optional `system` prompt and the proof loop passes the persona's system prompt to both the
+  before and after probes — matching the system turn the script rows train under. Without it
+  the adapter was probed out of its learned distribution, understating (even inverting) the
+  imprint; the CPU proof loop now reports a strong positive Δ (e.g. 0.066→0.247) and an
+  APPROVED verdict.
 
 ## [1.0.0] — 2026-06-11
 

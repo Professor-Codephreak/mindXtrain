@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prompt tools — non-permanent training tests · mindXtrain</title>
+  <link rel="stylesheet" href="/coach/static/style.css" />
+  <style>
+    body { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+    .pt-card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem;
+      background: var(--card); margin-bottom: 1rem; }
+    .pt-card > h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+    .pt-row { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.7rem; }
+    .pt-row label { font-size: 0.82rem; color: var(--muted); }
+    .pt-row textarea, .pt-row input[type=text], .pt-row select {
+      width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.4rem 0.6rem; font-family: inherit; }
+    .pt-row textarea { min-height: 3rem; resize: vertical; }
+    .pt-shot { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.4rem; margin-bottom: 0.4rem; }
+    .pt-shot input { width: 100%; }
+    button { background: var(--accent); color: #111; border: none; border-radius: 6px;
+      padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--accent-2); border: 1px solid var(--border); }
+    button:disabled { opacity: 0.5; cursor: progress; }
+    .pt-out { white-space: pre-wrap; background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.7rem; min-height: 3rem; font-size: 0.88rem; }
+    .pt-scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; margin-top: 0.6rem; }
+    .pt-metric { border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem; text-align: center; }
+    .pt-metric .v { font-size: 1.3rem; font-weight: 700; }
+    .pt-metric .k { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; }
+    .pass { color: var(--ok); } .fail { color: var(--bad); }
+    .pt-nav a { color: var(--accent-2); margin-right: 1rem; font-size: 0.85rem; }
+    .lede { color: var(--muted); }
+    .hidden { display: none; }
+    .pt-bar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="pt-nav">
+      <a href="/coach/">&larr; Coach</a>
+      <a href="/coach/dcoach">dcoach</a>
+      <a href="/coach/modelfile">Modelfile builder</a>
+    </div>
+    <h1>Prompt tools <span class="muted">— test cheap, promote if it wins</span></h1>
+    <p class="lede">
+      Prompting is the cheapest pseudo-training: craft a system prompt + a few
+      demonstrations, run them against a base model (no training), <strong>evaluate</strong>
+      the outcome with the clean-room eval tools, and only if the result is advantageous
+      <strong>make it permanent</strong> by baking it into an Ollama Modelfile.
+    </p>
+  </header>
+
+  <main>
+    <section class="pt-card">
+      <h3>1 · Craft the prompt</h3>
+      <div class="pt-row">
+        <label for="pt-model">Model</label>
+        <select id="pt-model"><option value="default">default</option></select>
+      </div>
+      <div class="pt-row">
+        <label for="pt-system">System prompt</label>
+        <textarea id="pt-system" placeholder="You are Codephreak — augmentic intelligence. Answer tersely, in your own voice."></textarea>
+      </div>
+      <div class="pt-row">
+        <label>Few-shot demonstrations (optional)</label>
+        <div id="pt-shots"></div>
+        <button class="ghost" id="pt-add-shot" type="button" style="align-self:flex-start;">+ add demonstration</button>
+      </div>
+    </section>
+
+    <section class="pt-card">
+      <h3>2 · Run a test</h3>
+      <div class="pt-row">
+        <label for="pt-user">Test prompt</label>
+        <textarea id="pt-user" placeholder="Who are you?"></textarea>
+      </div>
+      <div class="pt-bar">
+        <button id="pt-run">Run (no training)</button>
+        <span id="pt-status" class="muted" style="font-size:0.85rem;"></span>
+      </div>
+      <div class="pt-row" style="margin-top:0.7rem;">
+        <label>Response</label>
+        <div id="pt-response" class="pt-out"></div>
+      </div>
+    </section>
+
+    <section class="pt-card">
+      <h3>3 · Evaluate the outcome</h3>
+      <div class="pt-row">
+        <label for="pt-reference">Reference / ideal answer (for similarity + correctness)</label>
+        <textarea id="pt-reference" placeholder="i am codephreak, augmentic intelligence."></textarea>
+      </div>
+      <div class="pt-row">
+        <label for="pt-guidelines">Guidelines / rubric (optional, LLM-judged)</label>
+        <input id="pt-guidelines" type="text" placeholder="stays in persona; terse; no disclaimers" />
+      </div>
+      <div class="pt-bar">
+        <label style="font-size:0.85rem;color:var(--fg);"><input type="checkbox" id="pt-judge" /> use LLM judge</label>
+        <button id="pt-eval">Evaluate</button>
+      </div>
+      <div id="pt-scores" class="pt-scores hidden"></div>
+      <p id="pt-verdict" class="lede" style="margin-top:0.5rem;"></p>
+    </section>
+
+    <section class="pt-card">
+      <h3>4 · Make it permanent</h3>
+      <p class="lede">If the prompt wins, bake the system prompt + demonstrations into an
+        Ollama Modelfile so the behaviour ships without re-prompting.</p>
+      <div class="pt-row">
+        <label for="pt-tag">New model tag</label>
+        <input id="pt-tag" type="text" placeholder="codephreak-prompted:latest" />
+      </div>
+      <div class="pt-bar">
+        <button id="pt-promote">Make permanent (ollama create)</button>
+        <span id="pt-promote-status" class="muted" style="font-size:0.85rem;"></span>
+      </div>
+      <div class="pt-row" style="margin-top:0.6rem;">
+        <label>Modelfile preview</label>
+        <div id="pt-modelfile" class="pt-out"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/coach/static/prompts.js"></script>
+</body>
+</html>

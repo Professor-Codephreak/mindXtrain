@@ -115,14 +115,21 @@ def run_proof_loop(
     adapter = run_dir / "checkpoint"
 
     # 4) Probe before (base) vs after (adapter) recall.
+    from mindxtrain.data.scripts import persona_system_prompt
     from mindxtrain.eval.imprint import default_inquiries, probe_recall
 
     inq = inquiries or [e.user for e in all_exchanges][:4] or default_inquiries(base_persona.name)
     baseline = [e.assistant for e in all_exchanges] or list(base_persona.voice_examples)
+    system = persona_system_prompt(base_persona)  # match the conditioning the adapter trained under
     emit("probe", "recall before training…")
-    before = probe_recall(base_model, inq, force_cpu=force_cpu, max_new_tokens=max_new_tokens)
+    before = probe_recall(
+        base_model, inq, system=system, force_cpu=force_cpu, max_new_tokens=max_new_tokens,
+    )
     emit("probe", "recall after training…")
-    after = probe_recall(base_model, inq, adapter_dir=adapter, force_cpu=force_cpu, max_new_tokens=max_new_tokens)
+    after = probe_recall(
+        base_model, inq, adapter_dir=adapter, system=system,
+        force_cpu=force_cpu, max_new_tokens=max_new_tokens,
+    )
 
     # 5) Classroom test.
     from mindxtrain.governance.classroom import evaluate_classroom, graduate

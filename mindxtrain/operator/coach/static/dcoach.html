@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>dcoach — prove a CPU model recalls its training · mindXtrain</title>
+  <link rel="stylesheet" href="/coach/static/style.css" />
+  <style>
+    body { max-width: 1040px; margin: 0 auto; padding: 1.5rem; }
+    .dc-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+    .dc-card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem;
+      background: var(--card); margin-bottom: 1rem; }
+    .dc-card > h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+    .dc-row { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.7rem; }
+    .dc-row label { font-size: 0.82rem; color: var(--muted); }
+    .dc-row select, .dc-row input[type=text], .dc-row input[type=number] {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.4rem 0.6rem; font-family: inherit; }
+    .dc-skills { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.3rem; }
+    .dc-skills label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--fg); }
+    .dc-run { background: var(--accent); color: #111; border: none; border-radius: 6px;
+      padding: 0.6rem 1.2rem; font-weight: 600; font-size: 0.95rem; cursor: pointer; }
+    .dc-run:disabled { opacity: 0.5; cursor: progress; }
+    .dc-phases { font-size: 0.8rem; max-height: 240px; overflow-y: auto; }
+    .dc-phase { display: flex; gap: 0.5rem; padding: 0.15rem 0; border-bottom: 1px solid var(--border); }
+    .dc-phase .tag { color: var(--accent); min-width: 84px; font-weight: 600; }
+    .dc-verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.6rem; }
+    .dc-metric { border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem; text-align: center; }
+    .dc-metric .v { font-size: 1.4rem; font-weight: 700; }
+    .dc-metric .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .pass { color: var(--ok); } .fail { color: var(--bad); }
+    .dc-net { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.7rem; }
+    .dc-net-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; background: var(--bg); }
+    .dc-net-card h4 { margin: 0 0 0.4rem; font-size: 0.9rem; color: var(--accent-2); }
+    .dc-net-card p { margin: 0.2rem 0; font-size: 0.78rem; line-height: 1.4; }
+    .dc-net-card .meta { color: var(--muted); }
+    .dc-net-card .fit { color: var(--fg); border-left: 2px solid var(--accent); padding-left: 0.5rem; margin-top: 0.4rem; }
+    table.dc-fit { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    table.dc-fit th, table.dc-fit td { border: 1px solid var(--border); padding: 0.4rem 0.5rem; text-align: left; vertical-align: top; }
+    table.dc-fit th { color: var(--accent); }
+    .dc-nav a { color: var(--accent-2); margin-right: 1rem; font-size: 0.85rem; }
+    .lede { color: var(--muted); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="dc-nav">
+      <a href="/coach/">&larr; Coach</a>
+      <a href="/coach/prompts">Prompt tools</a>
+      <a href="/coach/modelfile">Modelfile builder</a>
+    </div>
+    <h1>dcoach <span class="muted">— prove the training stuck</span></h1>
+    <p class="lede">
+      Imprint a persona onto a tiny model on <strong>CPU</strong>, then prove the model
+      <em>recalls</em> it: the <strong>classroom</strong> measures recall before vs after
+      training, the <strong>boardroom</strong> rules success or failure, and the verdict
+      feeds the <strong>autotune feedback loop</strong> that tunes the next run. This is
+      mindXtrain's first-run proof — and the on-ramp to decentralized training.
+    </p>
+  </header>
+
+  <main class="dc-grid">
+    <section class="dc-card">
+      <h3>1 · Imprint &amp; Prove</h3>
+      <div class="dc-row">
+        <label for="dc-persona">Persona (the voice to imprint)</label>
+        <select id="dc-persona"></select>
+      </div>
+      <div class="dc-row">
+        <label>Skills (extra demonstrations, optional)</label>
+        <div id="dc-skills" class="dc-skills"></div>
+      </div>
+
+      <details>
+        <summary class="muted" style="cursor:pointer;font-size:0.85rem;">Advanced parameters</summary>
+        <div style="margin-top:0.6rem;">
+          <div class="dc-row">
+            <label for="dc-base">Base model (the actor)</label>
+            <input id="dc-base" type="text" value="HuggingFaceTB/SmolLM2-135M" />
+          </div>
+          <div class="dc-row">
+            <label for="dc-board">Boardroom preset</label>
+            <select id="dc-board">
+              <option value="classic_triad">classic_triad</option>
+              <option value="solo">solo</option>
+              <option value="quintet">quintet</option>
+            </select>
+          </div>
+          <div class="dc-row">
+            <label for="dc-board-model">Boardroom model (blank = tally classroom verdict)</label>
+            <input id="dc-board-model" type="text" placeholder="e.g. qwen3:0.6b" />
+          </div>
+          <div class="dc-row">
+            <label for="dc-tokens">Recall generation length (max_new_tokens)</label>
+            <input id="dc-tokens" type="number" value="48" min="8" max="256" />
+          </div>
+        </div>
+      </details>
+
+      <button id="dc-run" class="dc-run">Imprint &amp; Prove</button>
+      <span id="dc-status" class="muted" style="margin-left:0.8rem;font-size:0.85rem;"></span>
+    </section>
+
+    <section id="dc-live" class="dc-card hidden">
+      <h3>2 · Live proof loop</h3>
+      <div id="dc-phases" class="dc-phases"></div>
+    </section>
+
+    <section id="dc-result" class="dc-card hidden">
+      <h3>3 · Verdict</h3>
+      <div class="dc-verdict">
+        <div class="dc-metric"><div class="v" id="r-before">–</div><div class="k">recall before</div></div>
+        <div class="dc-metric"><div class="v" id="r-after">–</div><div class="k">recall after</div></div>
+        <div class="dc-metric"><div class="v" id="r-delta">–</div><div class="k">imprint Δ</div></div>
+        <div class="dc-metric"><div class="v" id="r-persona">–</div><div class="k">persona kept</div></div>
+        <div class="dc-metric"><div class="v" id="r-board">–</div><div class="k">boardroom</div></div>
+        <div class="dc-metric"><div class="v" id="r-passed">–</div><div class="k">proof</div></div>
+      </div>
+      <p id="r-rationale" class="lede" style="margin-top:0.7rem;"></p>
+      <p id="r-next" class="muted" style="font-size:0.82rem;"></p>
+    </section>
+
+    <section class="dc-card">
+      <h3>How mindXtrain fits decentralized training (2026)</h3>
+      <p id="dc-thesis" class="lede"></p>
+      <table class="dc-fit">
+        <thead><tr><th>Primitive</th><th>mindXtrain</th><th>Maps to</th></tr></thead>
+        <tbody id="dc-fit-body"></tbody>
+      </table>
+      <h4 style="margin:1rem 0 0.5rem;font-size:0.9rem;">The networks</h4>
+      <div id="dc-net" class="dc-net"></div>
+      <p class="muted" style="font-size:0.75rem;margin-top:0.7rem;">
+        Read-only. mindXtrain does not mine on these networks — every one is CUDA-first /
+        hardware-gated. It exposes a verifiable, payable training surface compatible with
+        their verification primitives. Source: <code>docs/decentralized-training-deep-dive-2026.md</code>.
+      </p>
+    </section>
+  </main>
+
+  <script src="/coach/static/dcoach.js"></script>
+</body>
+</html>
