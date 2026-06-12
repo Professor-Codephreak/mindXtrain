@@ -20,7 +20,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -198,8 +198,23 @@ app = FastAPI(
 
 # --- coach UI -------------------------------------------------------------
 
+
+class _NoCacheStaticFiles(StaticFiles):
+    """StaticFiles that forces browser revalidation.
+
+    The Coach JS/CSS change frequently; without this, browsers serve a stale
+    `coach.js` against fresh `index.html` (visible controls that don't wire up).
+    `no-cache` still allows efficient 304s via ETag — it just never serves stale.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Any:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 _COACH_STATIC = Path(__file__).parent / "coach" / "static"
-app.mount("/coach/static", StaticFiles(directory=_COACH_STATIC), name="coach-static")
+app.mount("/coach/static", _NoCacheStaticFiles(directory=_COACH_STATIC), name="coach-static")
 app.include_router(coach_router)
 app.include_router(training_router)
 

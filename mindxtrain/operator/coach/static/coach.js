@@ -1509,6 +1509,8 @@ async function loadChatModels() {
   if (!sel) return;
   let models = [];
   try { models = (await getJSON("/coach/api/models")).models || []; } catch (e) { /* offline */ }
+  // Preserve the user's current choice across the 30 s re-probe.
+  const previous = sel.value;
   sel.innerHTML = "";
   if (!models.length) {
     if ($("#chat-disabled-msg")) $("#chat-disabled-msg").hidden = false;
@@ -1521,8 +1523,11 @@ async function loadChatModels() {
     o.value = id; o.textContent = id;
     sel.appendChild(o);
   }
-  // Prefer the detected backend model; else the first (local-first, sorted server-side).
-  if (state.chatBackendModel && models.includes(state.chatBackendModel)) {
+  // Keep the user's selection if still present; else the detected backend model;
+  // else the first (local-first, sorted server-side).
+  if (previous && models.includes(previous)) {
+    sel.value = previous;
+  } else if (state.chatBackendModel && models.includes(state.chatBackendModel)) {
     sel.value = state.chatBackendModel;
   }
   if ($("#chat-disabled-msg")) $("#chat-disabled-msg").hidden = true;
@@ -1592,7 +1597,7 @@ async function sendChat() {
   inputEl.value = "";
   _appendChatMsg("user", input);
   _chatHistory.push({ role: "user", content: input });
-  const out = _appendChatMsg("assistant", "…");
+  const out = _appendChatMsg("assistant", "thinking…");
   $("#chat-send").disabled = true;
   $("#chat-stop").hidden = false;
   _chatAbort = new AbortController();
@@ -1601,7 +1606,7 @@ async function sendChat() {
     const resp = await fetch("/coach/api/chat/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, messages: _chatHistory, max_tokens: 768 }),
+      body: JSON.stringify({ model, messages: _chatHistory, max_tokens: 384 }),
       signal: _chatAbort.signal,
     });
     // Consume the SSE text stream (AI-SDK textStream pattern) token-by-token.
