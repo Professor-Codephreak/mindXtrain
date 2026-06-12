@@ -32,7 +32,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the **boardroom** (any N role-based members) convenes on the promotion motion →
   approved / rejected / disputed; the **dojo** settles a dispute with a panel of a
   **prime number** of judges (odd prime ≥ 3 → no tie, always resolves). See
-  [`docs/governance.md`](docs/governance.md).
+  [`docs/governance.md`](governance.md).
 - **Model-backed boardroom/dojo** (`governance.panel`) — members + judges
   deliberate with real models over any OpenAI-compatible backend
   (`deliberate`, `model_ballot`, `model_judge_ballot`). Coach **Boardroom** card +
@@ -44,7 +44,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 First production release. **CPU training is active end-to-end**; the GPU
 (MI300X / consumer) path is code-complete and validated on CPU dry-run + unit
 tests, pending real ROCm hardware to execute. Honest per-module status is in
-[`docs/actualization_status.md`](docs/actualization_status.md).
+[`docs/actualization_status.md`](actualization_status.md).
 
 ### Added (1.0.0)
 

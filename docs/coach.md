@@ -257,4 +257,4 @@ text-stream pattern, implemented in vanilla JS (no build step): `coach.js` consu
 
 For a remote vLLM-ROCm endpoint instead, set `MINDXTRAIN_BACKEND=vllm` +
 `MINDXTRAIN_VLLM_BASE_URL`; the same streaming chat works against it
-(see [HANDOFF.md](../HANDOFF.md) §§ 5–6).
+(see [HANDOFF.md](HANDOFF.md) §§ 5–6).

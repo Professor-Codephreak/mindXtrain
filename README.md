@@ -14,7 +14,7 @@ is fixed at training start, JIT autotune is forbidden in the production loop.
 ~38 modules ship as real Python on a CPU-only laptop; heavyweight training,
 eval, and quantization paths gate on opt-in extra dep groups. See
 [`docs/actualization_status.md`](docs/actualization_status.md) for the
-per-module map and [`HANDOFF.md`](HANDOFF.md) for the operator checklist.
+per-module map and [`HANDOFF.md`](docs/HANDOFF.md) for the operator checklist.
 
 ## Where this runs
 
@@ -26,7 +26,7 @@ per-module map and [`HANDOFF.md`](HANDOFF.md) for the operator checklist.
   fine-tunes a small fallback model on a single MI300X.
 
 The AMD × lablab.ai hackathon (May 4–10 2026) historical notes live in
-[`HACKATHON.md`](HACKATHON.md); [`docs/NAV.md`](docs/NAV.md) is the full
+[`HACKATHON.md`](docs/HACKATHON.md); [`docs/NAV.md`](docs/NAV.md) is the full
 documentation hub.
 
 ## Quickstart
@@ -51,7 +51,7 @@ uv sync --all-extras                                  # everything except amd-qu
 
 GPU steps (`bench` without `--dry-run`, `train`, `quantize`, `serve`) require
 an AMD MI300X with ROCm 7.2.1; run inside `rocm/primus:v26.2`. The full
-operator checklist lives in [`HANDOFF.md`](HANDOFF.md).
+operator checklist lives in [`HANDOFF.md`](docs/HANDOFF.md).
 
 ## Layout
 
@@ -70,7 +70,7 @@ scripts/          dev helpers
 
 | Doc | What it covers |
 |-----|----------------|
-| [`HANDOFF.md`](HANDOFF.md) | **Operator checklist** — 11 ordered steps from local setup to submission. |
+| [`HANDOFF.md`](docs/HANDOFF.md) | **Operator checklist** — 11 ordered steps from local setup to submission. |
 | [`docs/quickstart.md`](docs/quickstart.md) | Install + base-vs-extras command tour. |
 | [`docs/architecture.md`](docs/architecture.md) | Canonical layout + 5-layer architecture + MI300X invariants. |
 | [`docs/actualization_status.md`](docs/actualization_status.md) | Per-module map of what's real vs. requires extras. |
@@ -87,5 +87,5 @@ scripts/          dev helpers
 
 Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and the upstream-license
 notices in [`LICENSE-MIT-upstream-glm51`](LICENSE-MIT-upstream-glm51) and
-[`LICENSE-NOTICE.md`](LICENSE-NOTICE.md). Version history in
-[`CHANGELOG.md`](CHANGELOG.md).
+[`LICENSE-NOTICE.md`](docs/LICENSE-NOTICE.md). Version history in
+[`CHANGELOG.md`](docs/CHANGELOG.md).

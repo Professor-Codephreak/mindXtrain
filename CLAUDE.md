@@ -36,7 +36,7 @@ uv run uvicorn mindxtrain.operator.app:app --host 0.0.0.0 --port 8080
 # → http://localhost:8080/coach/
 ```
 
-GPU verbs (`bench` without `--dry-run`, `train`, `quantize`, `serve`) require an AMD MI300X with ROCm 7.2.1 inside `rocm/primus:v26.2`. The full operator path is in `HANDOFF.md`.
+GPU verbs (`bench` without `--dry-run`, `train`, `quantize`, `serve`) require an AMD MI300X with ROCm 7.2.1 inside `rocm/primus:v26.2`. The full operator path is in `docs/HANDOFF.md`.
 
 Solidity contracts live in `contracts/` (Foundry, solc 0.8.26): `forge install && forge test` from inside `contracts/`.
 
@@ -105,7 +105,8 @@ mindX artifacts (dream corpus, persona) through boundaries, it does not vendor m
 
 | Doc | What it covers |
 |-----|----------------|
-| `HANDOFF.md` | 11-step operator checklist (local → MI300X droplet → submission). |
+| `docs/NAV.md` | **Docs index** — start here; one line per doc, grouped. |
+| `docs/HANDOFF.md` | 11-step operator checklist (local → MI300X droplet → submission). |
 | `docs/architecture.md` | 5-layer architecture + MI300X invariants + data flow. |
 | `docs/development.md` | Toolchain, optional-deps, lazy-import pattern, debugging table. |
 | `docs/actualization_status.md` | Per-module map of what's real vs. requires extras. |

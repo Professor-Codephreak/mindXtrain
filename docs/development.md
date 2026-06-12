@@ -30,7 +30,7 @@ Conventions and invariants for working in this repo. Read once before opening a 
 | `obs`   | opentelemetry-sdk, prometheus-client, psutil                |
 
 Plus `all` which pulls everything except `amd-quark` (which ships in the
-rocm/primus container, see [HANDOFF.md](../HANDOFF.md) §3).
+rocm/primus container, see [HANDOFF.md](HANDOFF.md) §3).
 
 The base install (no extras) is enough for: the CLI, the Coach UI, the
 autotune dry-run, manifest verify, the operator FastAPI app, and every
@@ -76,11 +76,16 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 ```
 .
 ├── pyproject.toml                # single project; optional-dep groups
-├── HANDOFF.md                    # operator checklist
-├── HACKATHON.md                  # daily verification gates
-├── README.md, NOTICE, LICENSE-*  # legal + entry doc
-├── CHANGELOG.md
+├── README.md                     # entry doc (the only root .md besides CLAUDE/AGENTS)
+├── CLAUDE.md, AGENTS.md          # agent-tooling entrypoints (required at root)
+├── NOTICE, LICENSE-*             # legal
 ├── Containerfile, compose.yaml   # podman entry points
+├── docs/                         # all documentation (index: docs/NAV.md)
+│   ├── NAV.md                    # docs index
+│   ├── HANDOFF.md                # operator checklist
+│   ├── HACKATHON.md              # daily verification gates
+│   ├── CHANGELOG.md
+│   └── …                         # architecture, coach, governance, decentralized, reference
 ├── mindxtrain/                   # the package — 12 subpackages, ~99 modules
 │   ├── cli/                      # typer CLI (9 verbs)
 │   ├── config/                   # 10-section Pydantic schema + JSON defaults

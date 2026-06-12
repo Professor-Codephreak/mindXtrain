@@ -100,7 +100,7 @@ That's the contract the training layer consumes.
 
 ## On the MI300X (operator path)
 
-The full ordered checklist is in [HANDOFF.md](../HANDOFF.md). Quick version:
+The full ordered checklist is in [HANDOFF.md](HANDOFF.md). Quick version:
 
 ```bash
 # pull the canonical container
@@ -154,7 +154,7 @@ uv run uvicorn mindxtrain.operator.app:app --host 0.0.0.0 --port 8080
 
 ## Next steps
 
-- [HANDOFF.md](../HANDOFF.md) — operator checklist.
+- [HANDOFF.md](HANDOFF.md) — operator checklist.
 - [architecture.md](architecture.md) — canonical layout + 5-layer architecture.
 - [actualization_status.md](actualization_status.md) — what's real, what gates on extras.
 - [autotune.md](autotune.md) — the 60-second probe.

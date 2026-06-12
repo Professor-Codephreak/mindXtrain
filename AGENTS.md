@@ -13,7 +13,7 @@ The base install is CPU-only and runs the CLI, Coach UI, `bench --dry-run`, mani
 | You want to… | Read |
 |---|---|
 | Understand the architecture and invariants | [`CLAUDE.md`](CLAUDE.md), [`docs/architecture.md`](docs/architecture.md) |
-| Take the repo from "code done" to "demo live" | [`HANDOFF.md`](HANDOFF.md) (11 ordered steps) |
+| Take the repo from "code done" to "demo live" | [`HANDOFF.md`](docs/HANDOFF.md) (11 ordered steps) |
 | Know what's real Python vs. what needs `--extra <group>` | [`docs/actualization_status.md`](docs/actualization_status.md) |
 | Add a recipe / training backend / operator backend / training method | [`docs/development.md`](docs/development.md) §"Adding…" |
 | Look up every CLI verb's options + exit codes | [`docs/cli.md`](docs/cli.md) |
@@ -59,7 +59,7 @@ uv run mindxtrain receipt manifest.json --config run.yaml     # BLAKE3 round-tri
 uv run uvicorn mindxtrain.operator.app:app --port 8080        # → /coach/ UI
 ```
 
-GPU verbs (`bench` without `--dry-run`, `train`, `quantize`, `serve`) require an AMD MI300X with ROCm 7.2.1 inside `rocm/primus:v26.2`. See [`HANDOFF.md`](HANDOFF.md).
+GPU verbs (`bench` without `--dry-run`, `train`, `quantize`, `serve`) require an AMD MI300X with ROCm 7.2.1 inside `rocm/primus:v26.2`. See [`HANDOFF.md`](docs/HANDOFF.md).
 
 ## Available skills
 

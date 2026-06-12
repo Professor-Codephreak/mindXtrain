@@ -142,7 +142,7 @@ takes Day-1 through Day-6; treat this table as the per-day green/red.
 
 ## License compatibility
 
-Project is **Apache-2.0** ([LICENSE](../LICENSE)) with an explicit **MIT-compatibility statement** in [LICENSE-NOTICE.md](../LICENSE-NOTICE.md). The Apache 2.0 license is fully MIT-compatible per §4(d) of the Apache License — downstream consumers can relicense MIT while preserving the original NOTICE. Verify with the lablab Discord `#ineedhelp` channel if challenged at submission time.
+Project is **Apache-2.0** ([LICENSE](../LICENSE)) with an explicit **MIT-compatibility statement** in [LICENSE-NOTICE.md](LICENSE-NOTICE.md). The Apache 2.0 license is fully MIT-compatible per §4(d) of the Apache License — downstream consumers can relicense MIT while preserving the original NOTICE. Verify with the lablab Discord `#ineedhelp` channel if challenged at submission time.
 
 ## Wallet pre-funding (Day 5)
 

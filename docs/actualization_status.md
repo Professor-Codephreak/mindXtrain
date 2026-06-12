@@ -73,7 +73,7 @@ or `--all-extras`):
 | `obs` | `opentelemetry-sdk`, `prometheus-client`, `psutil` | `mindxtrain.operator.telemetry.*`, `mindxtrain.budget.resource.detect` |
 
 The `all` extra installs everything except `amd-quark` (which ships with the
-rocm/primus container — see [HANDOFF.md](../HANDOFF.md) §3).
+rocm/primus container — see [HANDOFF.md](HANDOFF.md) §3).
 
 ## Per-subpackage status
 
@@ -239,6 +239,6 @@ tests/
 
 ## See also
 
-- [HANDOFF.md](../HANDOFF.md) — ordered checklist for taking the project from "code is done" to "demo is live."
+- [HANDOFF.md](HANDOFF.md) — ordered checklist for taking the project from "code is done" to "demo is live."
 - [development.md](development.md) — toolchain, lazy-import pattern, how to add features.
 - [architecture.md](architecture.md) — canonical layout + 5-layer architecture.
