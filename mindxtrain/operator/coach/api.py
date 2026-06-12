@@ -742,8 +742,9 @@ async def api_models() -> dict[str, Any]:
         models = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
     except (httpx.HTTPError, OSError, ValueError):
         models = []
-    # Local models first so the chat/boardroom default isn't a :cloud model.
-    models.sort(key=lambda m: (":cloud" in m, m))
+    # Local models first so the chat/boardroom default isn't a cloud model
+    # (ollama cloud tags end in ":cloud" or "-cloud").
+    models.sort(key=lambda m: ("cloud" in m.lower(), m))
     return {"base_url": base, "models": models}
 
 
