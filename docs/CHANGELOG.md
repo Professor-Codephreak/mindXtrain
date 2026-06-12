@@ -8,6 +8,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **dcoach proof loop + clean-room eval tools.** Prove a CPU-trained model recalls
+  its training: `governance.proof_loop.run_proof_loop` chains compose-script → imprint-
+  train → probe before/after → **classroom** (`governance.classroom.evaluate_classroom`)
+  → **boardroom** decides → **autotune feedback** (`autotune.feedback`, nudges the next
+  run's params). New clean-room LlamaIndex-style evaluators (`eval.llama_evals`:
+  Semantic-Similarity / Correctness / Pairwise / Guideline — reuse existing embeddings +
+  the governance chat-judge). Endpoints `POST /coach/api/classroom/evaluate` and
+  `POST /coach/api/autotune/feedback`.
+
 - **Streaming chat + ollama controls** (Coach "Try the model" card). Responses now
   **stream token-by-token** (the AI-SDK text-stream pattern over SSE) via
   `POST /coach/api/chat/stream`, with a **model picker** (local models first, no more

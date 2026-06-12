@@ -681,6 +681,63 @@ async def api_imprint_score(req: ImprintScoreRequest) -> dict[str, Any]:
     return report.model_dump()
 
 
+# ---- classroom test + autotune feedback (dcoach proof loop) -------------
+
+
+class ClassroomEvalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    inquiries: list[str]
+    before: list[str]
+    after: list[str]
+    baseline: list[str]
+    use_judge: bool = False
+    model: str = ""
+    base_url: str | None = None
+
+
+class FeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    params: dict[str, int]
+    classroom_score: float
+    passed: bool
+    boardroom_outcome: str = "unknown"
+
+
+@router.post("/api/classroom/evaluate")
+async def api_classroom_evaluate(req: ClassroomEvalRequest) -> dict[str, Any]:
+    """Run the classroom before/after test — did the trained model recall the persona?
+
+    Scores from supplied before/after utterances + the persona baseline (the heavy model
+    generation that produces the utterances happens client-side / in the loop). Optional
+    `use_judge` runs the pairwise LLM judge off the event loop.
+    """
+    from mindxtrain.governance.classroom import evaluate_classroom
+
+    report = await asyncio.to_thread(
+        evaluate_classroom, req.inquiries, req.before, req.after, req.baseline,
+        use_judge=req.use_judge, model=(req.model or None), base_url=req.base_url,
+    )
+    return report.model_dump()
+
+
+@router.post("/api/autotune/feedback")
+async def api_autotune_feedback(req: FeedbackRequest) -> dict[str, Any]:
+    """Record a training outcome and suggest improved params for the next run."""
+    from mindxtrain.autotune import feedback as _fb
+
+    outcome = req.boardroom_outcome if req.boardroom_outcome in (
+        "approved", "rejected", "disputed", "unknown") else "unknown"
+    _fb.record(
+        run_id=req.run_id, params=req.params, classroom_score=req.classroom_score,
+        passed=req.passed, boardroom_outcome=outcome,  # type: ignore[arg-type]
+    )
+    suggestion = _fb.suggest_next_params(
+        req.params, passed=req.passed, classroom_score=req.classroom_score,
+    )
+    return {"recorded": True, "suggested_next_params": suggestion}
+
+
 # ---- governance: boardroom (any-N) + dojo (prime-N) ---------------------
 # A model is an actor; the classroom graduates it; the boardroom decides about
 # the graduation; a disputed boardroom is settled by a prime-sized dojo. The

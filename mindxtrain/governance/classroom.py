@@ -59,4 +59,71 @@ def graduate(
     )
 
 
-__all__ = ["Graduation", "graduate"]
+class ClassroomReport(BaseModel):
+    """Before-vs-after test of a trained actor against the previous model."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    inquiries: list[str]
+    before: list[str]
+    after: list[str]
+    before_recall: float = Field(description="similarity of before-utterances to the persona voice")
+    recall: float = Field(description="similarity of after-utterances to the persona voice")
+    imprint_delta: float
+    pairwise_after_better: float = Field(description="[0,1]; >0.5 = after closer to persona than before")
+    persona_maintained: bool
+    passed: bool
+    notes: list[str] = Field(default_factory=list)
+
+
+def evaluate_classroom(
+    inquiries: list[str],
+    before: list[str],
+    after: list[str],
+    baseline: list[str],
+    *,
+    use_judge: bool = False,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> ClassroomReport:
+    """Run the classroom test: does the trained model recall/maintain the persona?
+
+    Compares the previous (before) and trained (after) utterances against the persona
+    `baseline` voice using the imprint metric + a semantic-similarity check; optionally
+    a pairwise LLM judge (before vs after). `passed` iff the imprint took AND the
+    after-utterances are at least as close to the persona as the before-utterances.
+    """
+    from mindxtrain.eval.imprint import score_imprint
+
+    imprint = score_imprint(inquiries, before, after, baseline)
+    notes: list[str] = [f"imprint method={imprint.method}"]
+
+    # Pairwise: judge each inquiry (before vs after) toward the persona, else use the
+    # imprint delta sign as the signal.
+    if use_judge and model:
+        from mindxtrain.eval.llama_evals import PairwiseEvaluator
+
+        ev = PairwiseEvaluator(model=model, base_url=base_url)
+        ref = " ".join(baseline)[:400]
+        scores = [
+            ev.evaluate(q, b, a, reference=ref).score
+            for q, b, a in zip(inquiries, before, after, strict=False)
+        ]
+        pairwise = round(sum(scores) / len(scores), 4) if scores else 0.5
+        notes.append(f"pairwise judge={model}")
+    else:
+        pairwise = 1.0 if imprint.after_voice > imprint.before_voice else (
+            0.5 if imprint.after_voice == imprint.before_voice else 0.0)
+        notes.append("pairwise from imprint delta")
+
+    persona_maintained = imprint.imprinted and imprint.after_voice >= imprint.before_voice
+    passed = persona_maintained and pairwise >= 0.5
+    return ClassroomReport(
+        inquiries=inquiries, before=before, after=after,
+        before_recall=imprint.before_voice, recall=imprint.after_voice,
+        imprint_delta=imprint.imprint_delta, pairwise_after_better=pairwise,
+        persona_maintained=persona_maintained, passed=passed, notes=notes,
+    )
+
+
+__all__ = ["ClassroomReport", "Graduation", "evaluate_classroom", "graduate"]
