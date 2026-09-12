@@ -532,6 +532,22 @@ def publish(
 
 
 @app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", help="bind address"),
+    port: int = typer.Option(7862, help="port"),
+    share: bool = typer.Option(False, help="also expose a public gradio.live link"),
+    mcp: bool = typer.Option(True, help="serve the rooms as MCP tools too"),
+) -> None:
+    """Open the Gradio UI: the whole framework on one surface (Basic / Advanced / Scientific)."""
+    try:
+        from mindxtrain.ui import main as _ui_main
+    except ImportError as exc:  # pragma: no cover - depends on the extra
+        msg = "the UI needs gradio: `uv sync --extra ui`"
+        raise SystemExit(msg) from exc
+    _ui_main(host=host, port=port, share=share, mcp=mcp)
+
+
+@app.command()
 def receipt(
     manifest: Path = typer.Argument(..., help="path to provenance manifest.json"),
     config: Path = typer.Option(None, "--config"),
@@ -657,6 +673,41 @@ def imprint(
     if not report.imprinted:
         console.print("[yellow]no imprint detected (delta<=0 or no shift)[/yellow]")
         raise typer.Exit(code=4)
+
+
+# ---- research (autoresearch search over one editable file) --------------
+
+
+@app.command()
+def research(
+    contract: Path = typer.Argument(..., help="Path to the AttemptContract TOML."),
+    researcher: str = typer.Option("codephreak", "--researcher", help="Researcher id."),
+    max_attempts: int = typer.Option(10, "--max-attempts", "-n", help="Edits to try."),
+    log_root: Path = typer.Option(Path("./out/research"), "--log-root", help="Ledger root."),
+    anchor: bool = typer.Option(
+        False, "--anchor", help="Anchor the champion lineage on Base (needs --extra chain)."
+    ),
+) -> None:
+    """Run an autoresearch search: iterate edits on one file, keep iff the metric improves.
+
+    Each attempt is fenced to the contract's editable file and committed before measuring,
+    so the search trail is a sequence of re-checkable git commits recorded in a durable
+    ledger (`<log-root>/attempts.jsonl`). Losers are `git reset --hard` to the champion.
+    """
+    from mindxtrain.research.search import search_from_contract
+
+    try:
+        result = search_from_contract(
+            contract, researcher=researcher, max_attempts=max_attempts,
+            log_root=log_root, do_anchor=anchor,
+        )
+    except NotImplementedError as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:  # ResearchAbort, git failures, etc.
+        console.print(f"[red]research aborted:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]{result.summary()}[/green]")
 
 
 # ---- github / droplet (source-tree publishing + remote provision) -------

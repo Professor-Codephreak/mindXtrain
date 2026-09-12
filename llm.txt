@@ -1,0 +1,106 @@
+# llm.txt — mindXtrain, for another model
+
+You are reading the operator's note for an AI that has to work on this repository. It says what this
+is, what was just built, what is true, what is *not* true, and the traps that cost real hours. Prefer
+this file over inference; where it disagrees with a comment, check the code and fix one of them.
+
+## What mindXtrain is
+
+A production training framework for fine-tuning open-weight LLMs: `init → bench → train → imprint →
+eval → serve → publish`, a Typer CLI (`mindxtrain`), a FastAPI operator app, and — as of this work —
+a Gradio UI and a Hugging Face extension. It trains on an AMD MI300X when there is one and on **two
+CPU cores** when there is not; the CPU path is not a toy, it produced 77 generations of a live system.
+
+Source of truth: <https://github.com/professor-codephreak/mindXtrain>. It is consumed by
+[mindX](https://mindx.pythai.net), which writes its own memory into a corpus and trains on it.
+
+## The one claim, and its limits
+
+> A 135M model, two CPU cores and 70 minutes moved **proof-of-recall by +0.10**.
+
+That is generation 39, published as <https://huggingface.co/PYTHAI/mindXtrain39>. It proves the loop
+closes: dream → corpus → weights → a gate that can say no. It does **not** prove identity (the coach
+measured 16% of answers speaking as mindX) and it does not prove reasoning. **Generations 42–74 were
+all `proof_rejected`.** If you write a sentence that implies otherwise, you are wrong.
+
+## What was just built (read these first)
+
+| path | what it is |
+|---|---|
+| `mindxtrain/ui/app.py` | the whole framework as one Gradio surface. Tiers **Basic · Advanced · Scientific** — complexity is a dial, not a wall. Rooms: Forge (train) · Gate (imprint) · Measure (eval) · Serve · **Coach** · Hub · Bench · Runs |
+| `mindxtrain/ui/metrics.py` | diagnostics parsed from the trainer's own log. Every metric carries its **unit** and **source**. It never invents a step |
+| `mindxtrain/ui/theme.py` | one dark palette that survives Gradio 5 and 6 |
+| `mindxtrain/hf/extension.py` | the Hub as this framework needs it: `account`, `pull_base`, `warm`, `publish_generation`, `push_dataset`, `lineage`, `push_space` |
+
+Everything in the UI **shells out to the real CLI**. No room re-implements training. If a number
+appears in the UI, it was parsed from a file the trainer wrote — that invariant is the design.
+
+## How to work here
+
+```bash
+uv sync --extra ml            # training deps (trl, transformers, peft, accelerate)
+uv sync --extra chain         # huggingface_hub, for mindxtrain.hf
+uv run pytest -q              # the suite must stay green
+uv run mindxtrain --help      # the verbs are the contract
+uv run python -m mindxtrain.ui.app    # the UI at :7862
+```
+
+- Add a **verb**, not a script: the CLI is the interface everything else drives.
+- Add a **recipe** (`mindxtrain/train/recipes/*.yaml`), do not hardcode hyperparameters.
+- A run that cannot be re-hashed from its manifest is a story, not a result (`mindxtrain receipt`).
+
+## Traps that cost hours (all of these are real)
+
+1. **A LoRA has meaning only on the tensors it was trained on.** For months the fallback Modelfile
+   stacked a SmolLM2 adapter on a Qwen3 base: different architecture, hidden size and vocab. Nothing
+   downstream could tell — `ollama create` succeeds and the ascent records `promoted`. Verify the base
+   against `adapter_config.json:base_model_name_or_path` before serving.
+2. **`list_repo_tree` yields `RepoFile` *and* `RepoFolder`, both with `.path`.** Only
+   `repo_info().siblings` carry `.rfilename`. Reading the wrong attribute makes a scan report
+   "nothing on the Hub" while the repo is full. This exact bug hid 69 published generations.
+3. **The Hub checks a Space's ZeroGPU quota *before* it checks existence.** `create_repo(exist_ok=True,
+   space_hardware=…)` on an existing Space answers **402** once the account's two free slots are used.
+   Check `repo_exists` first.
+4. **A Space README's `short_description` must be ≤ 60 characters**, or `upload_folder` is refused.
+5. **Membership is not write scope.** A token can belong to an org and still be unable to write it.
+6. **Never put a write-scoped token on a public Space.**
+7. **Gradio 6** moved `theme`/`css` to `launch()` and dropped `Chatbot(type=…)`; its chat history
+   returns content as a *list of parts*. Read the installed signature; do not pin a major.
+8. **ZeroGPU quota belongs to the caller.** Anonymous visitors share a small pool; a signed-in visitor
+   spends their own minutes (5/day free, 40 PRO). `@spaces.GPU` functions must be defined at import,
+   and the model must be loaded at module level — the GPU workers are forked after startup.
+9. **Ollama's lineage models here were built from converted GGUF blobs**, not from a safetensors
+   folder. `ollama create` pointed at a safetensors directory can hang silently on this version.
+
+## The gate, and why it is the point
+
+`mindxtrain imprint` measures **recall before vs after** on the same probes, decoding greedily with
+`repetition_penalty=1.3`, `no_repeat_ngram_size=3`. Change the decoding and the number stops being
+comparable. The floor is calibrated against a **null** (an untrained random-init adapter), not chosen.
+A run that fails the gate is recorded as failed and is not served. *That refusal is the product.*
+
+## The teaching artifacts
+
+Published beside the weights at `PYTHAI/mindXtrain39`, and mirrored in mindX at
+`mindx/godel/mindxtrain/policy/`:
+
+- **`educational.policy.json`** — how to duplicate a successful run, written from gen39's own log
+  (116 steps, 2 epochs, 4,201 s, train loss 1.65, eval 1.225, LoRA r16/α32, 33% CPU at nice 19).
+- **`bootcamp.impression.json`** — drill → impression: build the corpus, train, probe the *frozen base
+  first*, probe the trained model on the same battery; the difference is the impression.
+- **`impression.bootcamp.json`** — impression → drill: join every probe back to the row that taught it,
+  raise what was not recalled, lower what holds, and let that write the next recipe.
+- **`THOT.json` + `inft/`** — the generation as a canonical record named by its own CIDv1
+  (`thot-bafkreiav76jv5zi4d63ns6zaamp3krolfzuqzrbquwumyslmej274ysaue`), with ERC-7857 facets. Minting
+  is a hand-off to AgenticPlace and is signed by a human; an agent does not sign mainnet.
+
+## If you are asked to change the UI
+
+Keep the three tiers. Keep "every number came from a file the trainer wrote". Add a room rather than
+crowding one. The Coach room is the loop closing: it reads measured influence, proposes the next
+recipe, and can start it — but it must never propose a rung the evidence already rejected.
+
+## Tone
+
+Say what is measured. When the honest verdict is *not yet*, say so — the repository does, and its
+credibility is the only thing that makes the positive numbers worth reading.

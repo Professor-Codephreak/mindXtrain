@@ -41,6 +41,10 @@ data = [
     "pyarrow>=18.0",
 ]
 serve = ["vllm>=0.6"]
+ui = [
+    "gradio[mcp]>=5.0",
+    "pyyaml>=6.0",
+]
 chain = [
     "web3>=7.5",
     "py-algorand-sdk>=2.7",
@@ -52,7 +56,7 @@ obs = [
     "psutil>=6.1",
 ]
 all = [
-    "mindxtrain[ml,eval,data,serve,chain,obs]",
+    "mindxtrain[ml,eval,data,serve,chain,obs,ui]",
 ]
 
 [build-system]
