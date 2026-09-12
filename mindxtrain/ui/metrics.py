@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 _DICT = re.compile(r"\{'(?:loss|eval_loss|train_runtime)'.*?\}")
-_TQDM = re.compile(r"(\d+)%\|[^|]*\|\s*(\d+)/(\d+)\s*\[([0-9:]+)<([0-9:?]+),\s*([0-9.]+)(s/it|it/s)")
+_TQDM = re.compile(r"(?:(?P<label>[A-Za-z][A-Za-z ._-]{2,30}):\s*)?(?P<pct>\d+)%\|[^|]*\|\s*"
+                   r"(?P<step>\d+)/(?P<total>\d+)\s*\[(?P<elapsed>[0-9:]+)<(?P<eta>[0-9:?]+),\s*(?P<rate>[0-9.]+)(?P<unit>s/it|it/s)")
 _THROTTLE = re.compile(r"cpu_throttle overridden:\s*percent=(\d+)\s*nice=(\d+)")
 _TOKENIZING = re.compile(r"Tokenizing train dataset:.*?(\d+)/(\d+)")
 
@@ -52,7 +53,8 @@ class RunMetrics:
     steps: List[Dict[str, float]] = field(default_factory=list)
     evals: List[Dict[str, float]] = field(default_factory=list)
     final: Dict[str, float] = field(default_factory=dict)
-    progress: Dict[str, Any] = field(default_factory=dict)
+    progress: Dict[str, Any] = field(default_factory=dict)        # the TRAINING bar
+    eval_progress: Dict[str, Any] = field(default_factory=dict)   # the evaluation loop's own bar
     throttle: Dict[str, int] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     phases: List[str] = field(default_factory=list)
@@ -169,6 +171,8 @@ class RunMetrics:
                 ["train_loss (final)", self._fmt(self.final.get("train_loss")), "nats/token", "closing dict"],
                 ["throttle", f"{self.throttle.get('percent','—')}% nice {self.throttle.get('nice','—')}", "", "mindXtrain"],
                 ["dataset rows tokenized", self.dataset_rows or "—", "rows", "datasets"],
+                ["eval pass", (f"{self.eval_progress.get('step')}/{self.eval_progress.get('total')}"
+                               if self.eval_progress else "—"), "batches", "tqdm (eval bar)"],
                 ["phases seen", " → ".join(self.phases[-4:]) or "—", "", "log"],
             ]
         return rows
@@ -218,6 +222,7 @@ def parse_log(log: Optional[Path]) -> RunMetrics:
         text = Path(log).read_text(errors="replace")
     except Exception:  # noqa: BLE001
         return m
+    bars: List[Dict[str, Any]] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
@@ -234,12 +239,18 @@ def parse_log(log: Optional[Path]) -> RunMetrics:
                 m.evals.append(rec)
             elif "loss" in rec:
                 m.steps.append(rec)
-        tq = _TQDM.search(line)
-        if tq:
-            pct, step, total, elapsed, remain, rate, unit = tq.groups()
-            s_it = float(rate) if unit == "s/it" else (1.0 / float(rate) if float(rate) else None)
-            m.progress.update({"pct": float(pct), "step": int(step), "total": int(total),
-                               "elapsed_s": _secs(elapsed), "eta_s": _secs(remain), "s_per_it": s_it})
+        for tq in _TQDM.finditer(line):
+            g = tq.groupdict()
+            rate = float(g["rate"])
+            s_it = rate if g["unit"] == "s/it" else (1.0 / rate if rate else None)
+            bar = {"pct": float(g["pct"]), "step": int(g["step"]), "total": int(g["total"]),
+                   "elapsed_s": _secs(g["elapsed"]), "eta_s": _secs(g["eta"]), "s_per_it": s_it}
+            label = (g["label"] or "").strip()
+            if label:                       # "Loading weights", "Tokenizing train dataset" — a phase, not the run
+                if label not in m.phases:
+                    m.phases.append(label)
+                continue
+            bars.append(bar)
         th = _THROTTLE.search(line)
         if th:
             m.throttle = {"percent": int(th.group(1)), "nice": int(th.group(2))}
@@ -258,6 +269,23 @@ def parse_log(log: Optional[Path]) -> RunMetrics:
             m.warnings.append("OOM / killed in the log — the run did not finish on its own terms")
         if "traceback" in low:
             m.warnings.append("a traceback is in the log — read the tail")
+    if bars:
+        # A run writes ONE training bar (its total never changes) and a FRESH bar per evaluation.
+        # Two wrong discriminators, both found by replaying a real log (2026-09-12): "the last bar
+        # seen" reports eval progress as the run's mid-run, and "the most frequent total" flips to the
+        # eval bar at the end, because tqdm redraws each eval bar many times. The one that holds is
+        # the CLOCK: the training bar's elapsed runs for the whole run (1:10:00 here) while every eval
+        # bar's elapsed restarts from zero.
+        by_total: Dict[int, float] = {}
+        for b in bars:
+            by_total[b["total"]] = max(by_total.get(b["total"], 0.0), b.get("elapsed_s") or 0.0)
+        train_total = max(by_total, key=lambda t: by_total[t])
+        train_bars = [b for b in bars if b["total"] == train_total]
+        other = [b for b in bars if b["total"] != train_total]
+        if train_bars:
+            m.progress.update(train_bars[-1])
+        if other:
+            m.eval_progress.update(other[-1])
     if m.steps and "Training" not in m.phases:
         m.phases.append("Training")
     if m.final:
