@@ -91,6 +91,7 @@ scripts/          dev helpers
 | [`docs/blueprints/`](docs/blueprints/) | Source design briefs (frozen specification). |
 | [`llm.txt`](llm.txt) | Orientation for another model — what is measured, what is not, the traps. |
 | [`examples/mindx/`](examples/mindx/HUGGINGFACE_MAP.md) | Example consumer — mindX on the Hugging Face Hub: its lineage, [docs dataset + mapping](https://huggingface.co/datasets/PYTHAI/mindX-docs/blob/main/MAPPING.md), Spaces and licence-pinned base models. The framework stays agnostic. |
+| [PYTHAI/mindXtrain on Hugging Face](https://huggingface.co/PYTHAI/mindXtrain) | The mindX-specific fork of this framework (from `661bd41`). mindX-only work proceeds there; this repository stays agnostic. |
 
 ## License
 
