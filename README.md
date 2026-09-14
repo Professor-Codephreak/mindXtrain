@@ -1,5 +1,12 @@
 # mindxtrain
 
+> **Archived for posterity — 2026-09-14.** mindXtrain continues on Hugging Face at
+> [huggingface.co/PYTHAI/mindXtrain](https://huggingface.co/PYTHAI/mindXtrain) (forked from this repository at
+> [`661bd41`](https://github.com/Professor-Codephreak/mindXtrain/commit/661bd411738d11e633b25c681bbd5676556bab7d)).
+> This repository is read-only and kept as the record of the pioneering work of
+> [Professor Codephreak](https://github.com/Professor-Codephreak). Thank you.
+
+
 Production training framework for fine-tuning open-weight LLMs on AMD MI300X
 and serving them through an OpenAI-compatible API. Single ordered package,
 canonical layout per [`docs/blueprints/mindXtrain2.md`](docs/blueprints/mindXtrain2.md)
@@ -91,7 +98,7 @@ scripts/          dev helpers
 | [`docs/blueprints/`](docs/blueprints/) | Source design briefs (frozen specification). |
 | [`llm.txt`](llm.txt) | Orientation for another model — what is measured, what is not, the traps. |
 | [`examples/mindx/`](examples/mindx/HUGGINGFACE_MAP.md) | Example consumer — mindX on the Hugging Face Hub: its lineage, [docs dataset + mapping](https://huggingface.co/datasets/PYTHAI/mindX-docs/blob/main/MAPPING.md), Spaces and licence-pinned base models. The framework stays agnostic. |
-| [PYTHAI/mindXtrain on Hugging Face](https://huggingface.co/PYTHAI/mindXtrain) | The mindX-specific fork of this framework (from `661bd41`). mindX-only work proceeds there; this repository stays agnostic. |
+| [PYTHAI/mindXtrain on Hugging Face](https://huggingface.co/PYTHAI/mindXtrain) | **Where mindXtrain continues.** Forked from this repository at `661bd41`; this repository is archived for posterity. |
 
 ## License
 

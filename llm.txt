@@ -11,10 +11,10 @@ eval → serve → publish`, a Typer CLI (`mindxtrain`), a FastAPI operator app,
 a Gradio UI and a Hugging Face extension. It trains on an AMD MI300X when there is one and on **two
 CPU cores** when there is not; the CPU path is not a toy, it produced 77 generations of a live system.
 
-Source of truth: <https://github.com/professor-codephreak/mindXtrain> — the **agnostic** upstream. It is consumed by
-[mindX](https://mindx.pythai.net), which writes its own memory into a corpus and trains on it. The **mindX-specific**
-line forked from this repository (at `661bd41`) and continues on Hugging Face: <https://huggingface.co/PYTHAI/mindXtrain>.
-Keep this repository general; put mindX-only changes there.
+**This GitHub repository is archived for posterity (2026-09-14).** mindXtrain continues on Hugging Face:
+<https://huggingface.co/PYTHAI/mindXtrain> — forked from here at `661bd41`, and the only place new work lands.
+It is consumed by [mindX](https://mindx.pythai.net), which writes its own memory into a corpus and trains on it.
+The pioneering work this repository preserves is Professor Codephreak's: <https://github.com/Professor-Codephreak>.
 
 ## The one claim, and its limits
 
