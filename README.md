@@ -89,6 +89,8 @@ scripts/          dev helpers
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Target metrics + the 7-cell framework comparison. |
 | [`docs/development.md`](docs/development.md) | Toolchain, optional-deps, lazy-import pattern, invariants. |
 | [`docs/blueprints/`](docs/blueprints/) | Source design briefs (frozen specification). |
+| [`llm.txt`](llm.txt) | Orientation for another model — what is measured, what is not, the traps. |
+| [mindX docs + mapping](https://huggingface.co/datasets/PYTHAI/mindX-docs/blob/main/MAPPING.md) | mindX's doctrine on the Hub (`PYTHAI/mindX-docs`: NAV · THESIS · MANIFESTO in full) and the mapping of every non-private mindX doc — what the corpus trains on, readable without a mindX checkout. |
 
 ## License
 
