@@ -94,26 +94,25 @@ Published beside the weights at `PYTHAI/mindXtrain39`, and mirrored in mindX at
   (`thot-bafkreiav76jv5zi4d63ns6zaamp3krolfzuqzrbquwumyslmej274ysaue`), with ERC-7857 facets. Minting
   is a hand-off to AgenticPlace and is signed by a human; an agent does not sign mainnet.
 
-## mindX's docs, and the mapping
+## Example consumer: mindX, its docs and its Hub map
 
-The corpus mindX trains on starts from its own doctrine — NAV, THESIS and MANIFESTO — and those are on the Hub,
-so a run here does not need a mindX checkout:
+mindXtrain stays agnostic: it trains whatever corpus you give it. mindX is the reference consumer, so the worked
+example lives in [`examples/mindx/`](examples/mindx/HUGGINGFACE_MAP.md) — every public Hugging Face repo mindX
+uses (the lineage, the docs dataset, the Spaces, the licence-pinned base-model forks), with what each one is.
 
-- <https://huggingface.co/datasets/PYTHAI/mindX-docs> — the public tier in full (`docs/NAV.md`,
-  `docs/THESIS.md`, `docs/MANIFESTO.md`), byte-identical to the node, sha256 per file in `mapping.json`.
-- **The mapping:** <https://huggingface.co/datasets/PYTHAI/mindX-docs/blob/main/MAPPING.md> — every non-private
-  mindX doc (title, tier, words, sha256, its page on mindx.pythai.net, where it lives on the Hub), plus
-  `hub_map.json`, the registry of what the lineage actually has on the Hub.
-- `PYTHAI/mindX-docs-gated` is **private** (participant and member tiers, token required). The private reference
-  subtrees are never published. Do not copy gated text into a public artifact.
+- mindX publishes its doctrine as a corpus-ready dataset: <https://huggingface.co/datasets/PYTHAI/mindX-docs>
+  (NAV, THESIS, MANIFESTO in full; sha256 per file) and the mapping of every mindX doc:
+  <https://huggingface.co/datasets/PYTHAI/mindX-docs/blob/main/MAPPING.md>. The gated tiers are private.
+- The mindX-specific wiring (which dataset, which persona, which gate floor) lives in mindX's bridge, not here.
+  A new consumer copies the shape, not the names.
 
 ```python
 from huggingface_hub import hf_hub_download
-nav = hf_hub_download("PYTHAI/mindX-docs", "docs/NAV.md", repo_type="dataset")
+nav = hf_hub_download("PYTHAI/mindX-docs", "docs/NAV.md", repo_type="dataset")   # the example consumer's corpus
 ```
 
-Trap: if a doc's sha256 differs from `mapping.json`, you are reading a different revision — pin `revision=` to
-the dataset commit you trained against and record it in the run manifest.
+Trap: if a doc's sha256 differs from the consumer's mapping, you are reading a different revision — pin `revision=`
+to the dataset commit you trained against and record it in the run manifest.
 
 ## If you are asked to change the UI
 
